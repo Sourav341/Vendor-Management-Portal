@@ -7,10 +7,6 @@
    (The app applies migrations automatically on startup.)
 3. Press F5.
 
-## First Admin
-Seeded from appsettings.json (SeedAdmin). Defaults: admin@vendorportal.local / Admin#12345
-Change them via right-click project > Manage User Secrets:
-    { "SeedAdmin": { "Email": "you@domain.com", "Password": "Strong#Pass123" } }
 
 ## Development email
 No SMTP is configured. In Development, the confirmation and reset links are shown on screen and logged.
