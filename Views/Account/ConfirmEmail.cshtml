@@ -1,0 +1,18 @@
+@model bool
+@{ ViewData["Title"] = "Confirm email"; }
+<section class="result-panel" aria-labelledby="confirm-email-title">
+    @if (Model)
+    {
+        <span class="result-icon" aria-hidden="true">✓</span>
+        <h1 id="confirm-email-title">Email confirmed</h1>
+        <p>Your email address has been confirmed. You can now sign in to the portal.</p>
+        <a asp-action="Login" class="btn btn-primary">Go to login</a>
+    }
+    else
+    {
+        <span class="result-icon" aria-hidden="true">!</span>
+        <h1 id="confirm-email-title">Confirmation link unavailable</h1>
+        <p>This confirmation link is invalid or has expired. Please request a new link or contact portal support.</p>
+        <a asp-controller="Home" asp-action="Index" class="btn btn-outline-primary">Return to home</a>
+    }
+</section>

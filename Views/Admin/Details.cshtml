@@ -1,0 +1,101 @@
+@model VendorApplication
+@{
+    ViewData["Title"] = "Application review";
+    var open = Model.Status is ApplicationStatus.PendingReview or ApplicationStatus.UnderReview;
+}
+
+<div class="review-back-row"><a asp-action="Index" class="btn btn-link ps-0">← Back to applications</a><span class="small text-muted">Application reference: #@Model.ApplicationId</span></div>
+<section class="portal-page-heading" aria-labelledby="review-title">
+    <div>
+        <span class="section-eyebrow">Application Review</span>
+        <h2 id="review-title">@Model.VendorProfile.FullName</h2>
+        <p>Review vendor details and supporting documents before recording a decision.</p>
+    </div>
+    <span class="badge bg-@Model.Status.Badge() review-status-badge">@Model.Status</span>
+</section>
+
+<div class="summary-grid review-summary-grid" aria-label="Vendor information">
+    <div class="summary-item"><span class="summary-label">Registered email</span><span class="summary-value">@Model.VendorProfile.User.Email</span></div>
+    <div class="summary-item"><span class="summary-label">Mobile number</span><span class="summary-value">@Model.VendorProfile.MobileNumber</span></div>
+    <div class="summary-item"><span class="summary-label">PAN</span><span class="summary-value">@Model.VendorProfile.PanNumber</span></div>
+    <div class="summary-item"><span class="summary-label">GST registration</span><span class="summary-value">@Model.VendorProfile.GstNumber</span></div>
+</div>
+
+<section class="portal-panel portal-section" aria-labelledby="review-documents-title">
+    <div class="panel-heading"><div><h3 id="review-documents-title">Document verification</h3><p>Open each submitted file and record the appropriate review outcome.</p></div></div>
+    <div class="table-responsive">
+        <table class="table align-middle mb-0">
+            <thead><tr><th scope="col">Document</th><th scope="col">Required</th><th scope="col">Status</th><th scope="col">File</th><th scope="col" style="min-width:340px">Review action / history</th></tr></thead>
+            <tbody>
+            @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
+            {
+                var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
+                var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
+                <tr>
+                    <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
+                    <td>@(d.IsRequired ? "Yes" : "No")</td>
+                    <td><span class="badge bg-@d.Status.Badge()">@d.Status</span></td>
+                    <td>@if (v != null) { <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">v@(v.VersionNumber): @v.OriginalFileName</a> } else { <span class="text-muted">Not uploaded</span> }</td>
+                    <td>
+                        @if (open && d.Status == DocumentStatus.Pending)
+                        {
+                            <form asp-action="ReviewDocument" method="post" class="review-action-form">
+                                <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                                <input type="hidden" name="vendorDocumentId" value="@d.VendorDocumentId" />
+                                <input name="remarks" class="form-control form-control-sm" placeholder="Remarks (required to reject)" maxlength="1000" aria-label="Remarks for @d.DocumentType.DisplayName()" />
+                                <div class="review-buttons"><button type="submit" name="decision" value="Approved" class="btn btn-sm btn-success">Approve</button><button type="submit" name="decision" value="Rejected" class="btn btn-sm btn-outline-danger">Reject</button></div>
+                            </form>
+                        }
+                        else if (rev != null)
+                        {
+                            <div class="review-history-line"><strong>@rev.Decision</strong><span>by @rev.Reviewer.Email</span>@if (!string.IsNullOrWhiteSpace(rev.Remarks)) { <p>@rev.Remarks</p> }</div>
+                        }
+                        else
+                        {
+                            <span class="text-muted small">No review recorded</span>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+@if (open)
+{
+    <section class="portal-panel portal-section final-decision-panel" aria-labelledby="final-decision-title">
+        <div class="panel-heading"><div><h3 id="final-decision-title">Final application decision</h3><p>Record the overall outcome after completing document verification.</p></div></div>
+        <div class="decision-form-body">
+            <form asp-action="FinalDecision" method="post">
+                <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                <label for="final-remarks" class="form-label">Administrative remarks</label>
+                <textarea id="final-remarks" name="remarks" class="form-control mb-3" rows="3" placeholder="Add remarks (required to reject or request corrections)" maxlength="1000"></textarea>
+                <div class="decision-buttons">
+                    <button type="submit" name="action" value="Approve" class="btn btn-success" onclick="return confirm('Approve this application?')">Approve application</button>
+                    <button type="submit" name="action" value="RequestCorrections" class="btn btn-outline-warning">Request corrections</button>
+                    <button type="submit" name="action" value="Reject" class="btn btn-outline-danger" onclick="return confirm('Reject this application?')">Reject application</button>
+                </div>
+            </form>
+        </div>
+    </section>
+}
+
+<section class="portal-panel" aria-labelledby="decision-history-title">
+    <div class="panel-heading"><div><h3 id="decision-history-title">Decision history</h3><p>Audit trail for recorded application decisions.</p></div></div>
+    <ul class="list-group list-group-flush">
+        @foreach (var h in Model.DecisionHistory.OrderByDescending(x => x.DecidedAt))
+        {
+            <li class="list-group-item decision-history-item">
+                <span class="decision-history-date">@h.DecidedAt.ToString("dd MMM yyyy HH:mm") UTC</span>
+                <span>@h.PreviousStatus <span aria-hidden="true">→</span> <strong>@h.NewStatus</strong></span>
+                <span class="decision-history-by">by @h.Admin.Email</span>
+                @if (!string.IsNullOrWhiteSpace(h.Remarks)) { <p>@h.Remarks</p> }
+            </li>
+        }
+        @if (!Model.DecisionHistory.Any())
+        {
+            <li class="list-group-item text-muted">No decisions have been recorded yet.</li>
+        }
+    </ul>
+</section>

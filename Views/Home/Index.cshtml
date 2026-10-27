@@ -1,0 +1,25 @@
+@{
+    ViewData["Title"] = "Home";
+}
+
+<section class="home-hero-banner portal-home-hero" aria-labelledby="home-hero-title">
+    <div class="home-hero-content">
+        <h2 id="home-hero-title">Vendor Management Portal</h2>
+        <p>Submit supporting documents and track the progress of your vendor application through a secure government portal.</p>
+        <div class="hero-actions">
+            @if (User.Identity?.IsAuthenticated != true)
+            {
+                <a class="btn-portal-primary" asp-controller="Account" asp-action="Login">Vendor Login <span aria-hidden="true">→</span></a>
+                <a class="btn-portal-secondary" asp-controller="Account" asp-action="Register">Register as a Vendor</a>
+            }
+            else if (User.IsInRole("Admin"))
+            {
+                <a class="btn-portal-primary" asp-controller="Admin" asp-action="Index">Review Applications <span aria-hidden="true">→</span></a>
+            }
+            else
+            {
+                <a class="btn-portal-primary" asp-controller="Vendor" asp-action="Dashboard">Open My Dashboard <span aria-hidden="true">→</span></a>
+            }
+        </div>
+    </div>
+</section>

@@ -1,0 +1,12 @@
+@model string?
+@{ ViewData["Title"] = "Check your email"; }
+<section class="result-panel" aria-labelledby="register-confirmation-title">
+    <span class="result-icon" aria-hidden="true">✉</span>
+    <h1 id="register-confirmation-title">Check your email</h1>
+    <p>We sent a confirmation link to your email address. Confirm your email before signing in.</p>
+    @if (Model != null)
+    {
+        <div class="alert alert-warning mt-3"><strong>Development mode:</strong> Email delivery is not configured. Use this confirmation link for local testing:<br /><a href="@Model">Open confirmation link</a></div>
+    }
+    <a asp-action="Login" class="btn btn-primary mt-2">Go to login</a>
+</section>

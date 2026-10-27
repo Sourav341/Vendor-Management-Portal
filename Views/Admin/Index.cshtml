@@ -1,0 +1,62 @@
+@model List<VendorApplication>
+@{
+    ViewData["Title"] = "Applications";
+    var status = ViewData["Status"] as ApplicationStatus?;
+}
+
+<section class="portal-page-heading" aria-labelledby="applications-title">
+    <div>
+        <span class="section-eyebrow">Administration Workspace</span>
+        <h2 id="applications-title">Vendor applications</h2>
+        <p>Search submissions, filter by status and open a record for document review.</p>
+    </div>
+    <div class="admin-record-count"><span class="summary-label">Records shown</span><strong>@Model.Count</strong></div>
+</section>
+
+<section class="portal-panel admin-filter-panel" aria-label="Filter applications">
+    <div class="panel-heading"><div><h3>Find an application</h3><p>Search by vendor name, PAN, GST or registered email.</p></div></div>
+    <form method="get" class="admin-filter-form">
+        <div class="filter-search-field">
+            <label for="application-search" class="form-label">Search</label>
+            <input id="application-search" name="search" value="@ViewData["Search"]" class="form-control" placeholder="Enter name, PAN, GST or email" />
+        </div>
+        <div class="filter-status-field">
+            <label for="application-status" class="form-label">Application status</label>
+            <select id="application-status" name="status" class="form-select">
+                <option value="">All submitted</option>
+                @foreach (var s in Enum.GetValues<ApplicationStatus>())
+                {
+                    <option value="@s" selected="@(status == s)">@s</option>
+                }
+            </select>
+        </div>
+        <div class="filter-actions"><button type="submit" class="btn btn-primary">Apply filters</button><a asp-action="Index" class="btn btn-outline-secondary">Clear</a></div>
+    </form>
+</section>
+
+<section class="portal-panel admin-results-panel" aria-labelledby="application-results-title">
+    <div class="panel-heading"><div><h3 id="application-results-title">Application register</h3><p>Open a record to view uploaded documents and review decisions.</p></div></div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th scope="col">Vendor</th><th scope="col">Registered email</th><th scope="col">PAN</th><th scope="col">GST</th><th scope="col">Submitted</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
+            <tbody>
+            @foreach (var a in Model)
+            {
+                <tr>
+                    <td><span class="vendor-name-cell">@a.VendorProfile.FullName</span></td>
+                    <td>@a.VendorProfile.User.Email</td>
+                    <td>@a.VendorProfile.PanNumber</td>
+                    <td>@a.VendorProfile.GstNumber</td>
+                    <td>@a.SubmittedAt?.ToString("dd MMM yyyy")</td>
+                    <td><span class="badge bg-@a.Status.Badge()">@a.Status</span></td>
+                    <td><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@a.ApplicationId">Review <span aria-hidden="true">→</span></a></td>
+                </tr>
+            }
+            @if (Model.Count == 0)
+            {
+                <tr><td colspan="7"><div class="table-empty-state"><span class="empty-state-mark" aria-hidden="true">⌕</span><strong>No applications found</strong><span>Try changing the search term or status filter.</span></div></td></tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

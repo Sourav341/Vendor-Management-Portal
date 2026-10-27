@@ -1,0 +1,71 @@
+@model RegisterViewModel
+@{ ViewData["Title"] = "Register"; }
+
+<section class="auth-page" aria-labelledby="register-title">
+    <div class="auth-layout auth-layout--wide">
+        <aside class="auth-intro auth-intro--image">
+            <img class="auth-emblem" src="~/images/jharkhand-state-emblem.png" alt="Jharkhand State Emblem" width="50" height="50" />
+            <span class="auth-eyebrow">Vendor onboarding</span>
+            <h2>Register your business</h2>
+            <p>Create a vendor account to complete your profile, upload the required documents and track your application online.</p>
+            <ul class="auth-benefits">
+                <li>Keep your registration details ready</li>
+                <li>Use a valid email and mobile number</li>
+                <li>Keep PAN and GST details accurate</li>
+            </ul>
+        </aside>
+        <div class="auth-form-panel">
+            <h1 id="register-title">Vendor registration</h1>
+            <p class="auth-subtitle">Fields marked as required by the form must be completed before registration.</p>
+            <form asp-action="Register" method="post">
+                <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+                <div class="mb-3">
+                    <label asp-for="FullName" class="form-label"></label>
+                    <input asp-for="FullName" class="form-control" autocomplete="name" />
+                    <span asp-validation-for="FullName" class="text-danger"></span>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6 mb-2">
+                        <label asp-for="PanNumber" class="form-label"></label>
+                        <input asp-for="PanNumber" class="form-control text-uppercase" maxlength="10" autocomplete="off" />
+                        <span asp-validation-for="PanNumber" class="text-danger"></span>
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <label asp-for="MobileNumber" class="form-label"></label>
+                        <input asp-for="MobileNumber" class="form-control" maxlength="10" autocomplete="tel" inputmode="numeric" />
+                        <span asp-validation-for="MobileNumber" class="text-danger"></span>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="Email" class="form-label"></label>
+                    <input asp-for="Email" class="form-control" autocomplete="email" />
+                    <span asp-validation-for="Email" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="GstNumber" class="form-label"></label>
+                    <input asp-for="GstNumber" class="form-control text-uppercase" maxlength="15" autocomplete="off" />
+                    <span asp-validation-for="GstNumber" class="text-danger"></span>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6 mb-2">
+                        <label asp-for="Password" class="form-label"></label>
+                        <input asp-for="Password" class="form-control" autocomplete="new-password" />
+                        <span asp-validation-for="Password" class="text-danger"></span>
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <label asp-for="ConfirmPassword" class="form-label"></label>
+                        <input asp-for="ConfirmPassword" class="form-control" autocomplete="new-password" />
+                        <span asp-validation-for="ConfirmPassword" class="text-danger"></span>
+                    </div>
+                </div>
+                <div class="form-text mb-3">Use at least 8 characters, including an uppercase letter, lowercase letter, digit and symbol.</div>
+                <button type="submit" class="btn btn-primary w-100">Create vendor account <span aria-hidden="true">→</span></button>
+            </form>
+            <div class="auth-links"><p>Already registered? <a asp-action="Login">Sign in</a></p></div>
+            <div class="auth-security-note">
+                @* <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg> *@
+                <span>Check the details carefully before submission. Your registration details will be used for application communication.</span>
+            </div>
+        </div>
+    </div>
+</section>

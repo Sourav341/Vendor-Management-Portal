@@ -1,0 +1,85 @@
+@model VendorApplication
+@{
+    ViewData["Title"] = "Dashboard";
+    var canEdit = Model.Status is ApplicationStatus.Draft or ApplicationStatus.CorrectionsRequired;
+    var lastDecision = Model.DecisionHistory.OrderByDescending(h => h.DecidedAt).FirstOrDefault();
+}
+
+<section class="portal-page-heading" id="application-status" aria-labelledby="vendor-dashboard-title">
+    <div>
+        <span class="section-eyebrow">Vendor Workspace</span>
+        <h2 id="vendor-dashboard-title">Welcome, @Model.VendorProfile.FullName</h2>
+        <p>Manage your application, submit supporting documents and follow review updates.</p>
+    </div>
+    <div class="status-line">Application status <span class="badge bg-@Model.Status.Badge()">@Model.Status</span></div>
+</section>
+
+<div class="summary-grid" id="application-summary" aria-label="Vendor details">
+    <div class="summary-item"><span class="summary-label">PAN</span><span class="summary-value">@Model.VendorProfile.PanNumber</span></div>
+    <div class="summary-item"><span class="summary-label">GST registration</span><span class="summary-value">@(string.IsNullOrWhiteSpace(Model.VendorProfile.GstNumber) ? "Not provided" : Model.VendorProfile.GstNumber)</span></div>
+    <div class="summary-item"><span class="summary-label">Next step</span><span class="summary-value">@(canEdit ? "Complete documents and submit" : "Check application updates")</span></div>
+</div>
+
+@if (Model.Status == ApplicationStatus.CorrectionsRequired && lastDecision?.Remarks != null)
+{
+    <div class="alert alert-warning" role="alert"><strong>Corrections requested by the reviewing officer</strong><div class="mt-1">@lastDecision.Remarks</div></div>
+}
+@if (Model.Status == ApplicationStatus.Approved)
+{
+    <div class="alert alert-success" role="status"><strong>Application approved.</strong> Your application has been approved. Please retain this confirmation for your records.</div>
+}
+@if (Model.Status == ApplicationStatus.Rejected)
+{
+    <div class="alert alert-danger" role="alert"><strong>Application rejected.</strong> @lastDecision?.Remarks</div>
+}
+
+<section class="portal-panel portal-section" id="required-documents" aria-labelledby="documents-title">
+    <div class="panel-heading">
+        <div><h3 id="documents-title">Required documents</h3><p>Check each document's status and upload a clear PDF, JPG or PNG file where available.</p></div>
+        <span class="badge text-bg-light border">@Model.Documents.Count() documents</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table align-middle mb-0">
+            <thead><tr><th scope="col">Document</th><th scope="col">Required</th><th scope="col">Status</th><th scope="col">Remarks</th><th scope="col">File</th><th scope="col" style="min-width:280px">Upload / Replace</th></tr></thead>
+            <tbody>
+            @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
+            {
+                var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
+                var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
+                var canUpload = canEdit && (Model.Status == ApplicationStatus.Draft || d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+                <tr>
+                    <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
+                    <td>@(d.IsRequired ? "Yes" : "No")</td>
+                    <td><span class="badge bg-@d.Status.Badge()">@d.Status</span></td>
+                    <td class="text-danger">@(d.Status == DocumentStatus.Rejected ? rev?.Remarks : null)</td>
+                    <td>@if (v != null) { <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">View v@(v.VersionNumber)</a> } else { <span class="text-muted">Not uploaded</span> }</td>
+                    <td>
+                        @if (canUpload)
+                        {
+                            <form asp-action="Upload" method="post" enctype="multipart/form-data" class="document-upload-form">
+                                <input type="hidden" name="type" value="@d.DocumentType" />
+                                <input type="file" name="file" class="form-control form-control-sm" accept=".pdf,.jpg,.jpeg,.png" aria-label="Select @d.DocumentType.DisplayName() file" required />
+                                <button class="btn btn-sm btn-outline-primary">@(v == null ? "Upload" : "Replace")</button>
+                            </form>
+                        }
+                        else if (!canEdit)
+                        {
+                            <span class="text-muted small">Uploads are closed for this status</span>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+@if (canEdit)
+{
+    <section class="submit-panel" id="submit-application" aria-label="Submit application">
+        <div><h3>Ready to submit?</h3><p>Review your entries before submitting. Required documents must be provided for the application to be processed.</p><small>Accepted formats: PDF, JPG or PNG · Maximum 3 MB per file.</small></div>
+        <form asp-action="Submit" method="post">
+            <button class="btn btn-success btn-lg">@(Model.Status == ApplicationStatus.Draft ? "Submit application" : "Resubmit corrections") <span aria-hidden="true">→</span></button>
+        </form>
+    </section>
+}
