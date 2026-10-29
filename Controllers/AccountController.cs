@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using VendorPortal.Data;
@@ -31,40 +32,167 @@ public class AccountController : Controller
 
     // ---------------- Register (no email verification) ----------------
 
+
+
+    private static readonly string[] JharkhandDistricts =
+    {
+    "Bokaro",
+    "Chatra",
+    "Deoghar",
+    "Dhanbad",
+    "Dumka",
+    "East Singhbhum",
+    "Garhwa",
+    "Giridih",
+    "Godda",
+    "Gumla",
+    "Hazaribagh",
+    "Jamtara",
+    "Khunti",
+    "Koderma",
+    "Latehar",
+    "Lohardaga",
+    "Pakur",
+    "Palamu",
+    "Ramgarh",
+    "Ranchi",
+    "Sahibganj",
+    "Seraikela-Kharsawan",
+    "Simdega",
+    "West Singhbhum"
+};
+
+    private static readonly string[] GenderOptions =
+    {
+    "Male",
+    "Female",
+    "Other"
+};
+
+    private void LoadRegistrationDropdowns(RegisterViewModel? model = null)
+    {
+        ViewBag.Districts = new SelectList(
+            JharkhandDistricts,
+            model?.District
+        );
+
+        ViewBag.Genders = new SelectList(
+            GenderOptions,
+            model?.Gender
+        );
+    }
+
     [HttpGet, AllowAnonymous]
-    public IActionResult Register() => View(new RegisterViewModel());
+    public IActionResult Register()
+    {
+        var model = new RegisterViewModel();
+
+        LoadRegistrationDropdowns(model);
+
+        return View(model);
+    }
 
     [HttpPost, AllowAnonymous]
     public async Task<IActionResult> Register(RegisterViewModel m)
     {
-        if (!ModelState.IsValid) return View(m);
+        // Validate the district selection.
+        if (string.IsNullOrWhiteSpace(m.District) ||
+            !JharkhandDistricts.Contains(
+                m.District,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            ModelState.AddModelError(
+                nameof(m.District),
+                "Please select a valid Jharkhand district."
+            );
+        }
+
+        // Validate gender when supplied.
+        if (!string.IsNullOrWhiteSpace(m.Gender) &&
+            !GenderOptions.Contains(
+                m.Gender,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            ModelState.AddModelError(
+                nameof(m.Gender),
+                "Please select a valid gender."
+            );
+        }
+
+        if (!ModelState.IsValid)
+        {
+            LoadRegistrationDropdowns(m);
+            return View(m);
+        }
 
         var pan = m.PanNumber.Trim().ToUpperInvariant();
         var gst = m.GstNumber.Trim().ToUpperInvariant();
 
         if (await _db.VendorProfiles.AnyAsync(p => p.PanNumber == pan))
-            ModelState.AddModelError(nameof(m.PanNumber), "This PAN is already registered.");
+        {
+            ModelState.AddModelError(
+                nameof(m.PanNumber),
+                "This PAN is already registered."
+            );
+        }
+
         if (await _db.VendorProfiles.AnyAsync(p => p.GstNumber == gst))
-            ModelState.AddModelError(nameof(m.GstNumber), "This GST number is already registered.");
-        if (!ModelState.IsValid) return View(m);
+        {
+            ModelState.AddModelError(
+                nameof(m.GstNumber),
+                "This GST number is already registered."
+            );
+        }
+
+        if (!ModelState.IsValid)
+        {
+            LoadRegistrationDropdowns(m);
+            return View(m);
+        }
 
         var email = m.Email.Trim();
+
         var user = new ApplicationUser
         {
             UserName = email,
             Email = email,
             PhoneNumber = m.MobileNumber,
-            EmailConfirmed = true          // no verification step
+            EmailConfirmed = true
         };
 
         var result = await _users.CreateAsync(user, m.Password);
+
         if (!result.Succeeded)
         {
-            foreach (var e in result.Errors) ModelState.AddModelError(string.Empty, e.Description);
+            foreach (var error in result.Errors)
+            {
+                ModelState.AddModelError(
+                    string.Empty,
+                    error.Description
+                );
+            }
+
+            LoadRegistrationDropdowns(m);
             return View(m);
         }
 
-        await _users.AddToRoleAsync(user, "Vendor");
+        var roleResult = await _users.AddToRoleAsync(user, "Vendor");
+
+        if (!roleResult.Succeeded)
+        {
+            foreach (var error in roleResult.Errors)
+            {
+                ModelState.AddModelError(
+                    string.Empty,
+                    error.Description
+                );
+            }
+
+            await _users.DeleteAsync(user);
+
+            LoadRegistrationDropdowns(m);
+            return View(m);
+        }
 
         _db.VendorProfiles.Add(new VendorProfile
         {
@@ -72,7 +200,21 @@ public class AccountController : Controller
             FullName = m.FullName.Trim(),
             PanNumber = pan,
             GstNumber = gst,
-            MobileNumber = m.MobileNumber
+            MobileNumber = m.MobileNumber,
+
+            // Additional vendor profile fields
+            TradeName = m.TradeName?.Trim(),
+            District = JharkhandDistricts.First(
+                d => string.Equals(
+                    d,
+                    m.District,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ),
+            Gender = m.Gender,
+            DOB = m.DOB,
+            Father_Husband_Name = m.Father_Husband_Name?.Trim(),
+            Trade_Address = m.Trade_Address?.Trim()
         });
 
         try
@@ -82,13 +224,23 @@ public class AccountController : Controller
         catch (DbUpdateException)
         {
             await _users.DeleteAsync(user);
-            ModelState.AddModelError(string.Empty, "Registration failed. PAN or GST may already be registered.");
+
+            ModelState.AddModelError(
+                string.Empty,
+                "Registration failed. Please verify your registration details."
+            );
+
+            LoadRegistrationDropdowns(m);
             return View(m);
         }
 
-        TempData["Success"] = "Registration successful. Please log in with your email and password.";
+        TempData["Success"] =
+            "Registration successful. Please log in with your email and password.";
+
         return RedirectToAction(nameof(Login));
     }
+
+
 
     // ---------------- Login / Logout ----------------
 

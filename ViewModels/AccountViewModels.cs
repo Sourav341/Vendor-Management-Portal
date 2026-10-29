@@ -40,7 +40,31 @@ public class RegisterViewModel
 
     [Required, EmailAddress, Display(Name = "Email address")]
     public string Email { get; set; } = "";
-       
+
+    [Required(ErrorMessage = "Please select a district.")]
+    [Display(Name = "District")]
+    public string District { get; set; } = "";
+
+
+    [StringLength(150)]
+    [Display(Name = "Trade name")]
+    public string? TradeName { get; set; }
+
+    [Display(Name = "Gender")]
+    public string? Gender { get; set; }
+
+    [Display(Name = "Date of birth")]
+    [DataType(DataType.Date)]
+    public string? DOB { get; set; }
+
+    [StringLength(150)]
+    [Display(Name = "Father/Husband name")]
+    public string? Father_Husband_Name { get; set; }
+
+    [StringLength(450)]
+    [Display(Name = "Trade address")]
+    public string? Trade_Address { get; set; }
+
 
     [Required, DataType(DataType.Password)]
     public string Password { get; set; } = "";

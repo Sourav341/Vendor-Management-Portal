@@ -1,85 +1,373 @@
 @model VendorApplication
+
 @{
     ViewData["Title"] = "Dashboard";
-    var canEdit = Model.Status is ApplicationStatus.Draft or ApplicationStatus.CorrectionsRequired;
-    var lastDecision = Model.DecisionHistory.OrderByDescending(h => h.DecidedAt).FirstOrDefault();
+
+    var canEdit = Model.Status is ApplicationStatus.Draft
+        or ApplicationStatus.CorrectionsRequired;
+
+    var lastDecision = Model.DecisionHistory
+        .OrderByDescending(h => h.DecidedAt)
+        .FirstOrDefault();
+
+    var orderedDocuments = Model.Documents
+        .OrderBy(x => x.DocumentType)
+        .ToList();
 }
 
-<section class="portal-page-heading" id="application-status" aria-labelledby="vendor-dashboard-title">
+<!-- Application heading -->
+<section class="portal-page-heading"
+         id="application-status"
+         aria-labelledby="vendor-dashboard-title">
     <div>
         <span class="section-eyebrow">Vendor Workspace</span>
         <h2 id="vendor-dashboard-title">Welcome, @Model.VendorProfile.FullName</h2>
         <p>Manage your application, submit supporting documents and follow review updates.</p>
     </div>
-    <div class="status-line">Application status <span class="badge bg-@Model.Status.Badge()">@Model.Status</span></div>
+
+    <div class="status-line">
+        Application status
+        <span class="badge bg-@Model.Status.Badge()">@Model.Status</span>
+    </div>
 </section>
 
+<!-- Vendor summary -->
 <div class="summary-grid" id="application-summary" aria-label="Vendor details">
-    <div class="summary-item"><span class="summary-label">PAN</span><span class="summary-value">@Model.VendorProfile.PanNumber</span></div>
-    <div class="summary-item"><span class="summary-label">GST registration</span><span class="summary-value">@(string.IsNullOrWhiteSpace(Model.VendorProfile.GstNumber) ? "Not provided" : Model.VendorProfile.GstNumber)</span></div>
-    <div class="summary-item"><span class="summary-label">Next step</span><span class="summary-value">@(canEdit ? "Complete documents and submit" : "Check application updates")</span></div>
+    <div class="summary-item">
+        <span class="summary-label">PAN</span>
+        <span class="summary-value">@Model.VendorProfile.PanNumber</span>
+    </div>
+
+    <div class="summary-item">
+        <span class="summary-label">GST registration</span>
+        <span class="summary-value">
+            @(string.IsNullOrWhiteSpace(Model.VendorProfile.GstNumber)
+                ? "Not provided"
+                : Model.VendorProfile.GstNumber)
+        </span>
+    </div>
+
+    <div class="summary-item">
+        <span class="summary-label">Next step</span>
+        <span class="summary-value">
+            @(canEdit ? "Complete documents and submit" : "Check application updates")
+        </span>
+    </div>
 </div>
+
+<!-- Application status and submission messages -->
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert alert-success" role="status">@successMessage</div>
+}
+
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+
+@if (TempData["ProfileSuccess"] is string profileSuccess)
+{
+    <div class="alert alert-success" role="status">@profileSuccess</div>
+}
+
+@if (TempData["ProfileError"] is string profileError)
+{
+    <div class="alert alert-danger" role="alert">@profileError</div>
+}
 
 @if (Model.Status == ApplicationStatus.CorrectionsRequired && lastDecision?.Remarks != null)
 {
-    <div class="alert alert-warning" role="alert"><strong>Corrections requested by the reviewing officer</strong><div class="mt-1">@lastDecision.Remarks</div></div>
+    <div class="alert alert-warning" role="alert">
+        <strong>Corrections requested by the reviewing officer</strong>
+        <div class="mt-1">@lastDecision.Remarks</div>
+    </div>
 }
+
 @if (Model.Status == ApplicationStatus.Approved)
 {
-    <div class="alert alert-success" role="status"><strong>Application approved.</strong> Your application has been approved. Please retain this confirmation for your records.</div>
+    <div class="alert alert-success" role="status">
+        <strong>Application approved.</strong>
+        Your application has been approved. Please retain this confirmation for your records.
+    </div>
 }
+
 @if (Model.Status == ApplicationStatus.Rejected)
 {
-    <div class="alert alert-danger" role="alert"><strong>Application rejected.</strong> @lastDecision?.Remarks</div>
+    <div class="alert alert-danger" role="alert">
+        <strong>Application rejected.</strong> @lastDecision?.Remarks
+    </div>
 }
 
-<section class="portal-panel portal-section" id="required-documents" aria-labelledby="documents-title">
-    <div class="panel-heading">
-        <div><h3 id="documents-title">Required documents</h3><p>Check each document's status and upload a clear PDF, JPG or PNG file where available.</p></div>
-        <span class="badge text-bg-light border">@Model.Documents.Count() documents</span>
-    </div>
-    <div class="table-responsive">
-        <table class="table align-middle mb-0">
-            <thead><tr><th scope="col">Document</th><th scope="col">Required</th><th scope="col">Status</th><th scope="col">Remarks</th><th scope="col">File</th><th scope="col" style="min-width:280px">Upload / Replace</th></tr></thead>
-            <tbody>
-            @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
-            {
-                var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
-                var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
-                var canUpload = canEdit && (Model.Status == ApplicationStatus.Draft || d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
-                <tr>
-                    <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
-                    <td>@(d.IsRequired ? "Yes" : "No")</td>
-                    <td><span class="badge bg-@d.Status.Badge()">@d.Status</span></td>
-                    <td class="text-danger">@(d.Status == DocumentStatus.Rejected ? rev?.Remarks : null)</td>
-                    <td>@if (v != null) { <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">View v@(v.VersionNumber)</a> } else { <span class="text-muted">Not uploaded</span> }</td>
-                    <td>
-                        @if (canUpload)
-                        {
-                            <form asp-action="Upload" method="post" enctype="multipart/form-data" class="document-upload-form">
-                                <input type="hidden" name="type" value="@d.DocumentType" />
-                                <input type="file" name="file" class="form-control form-control-sm" accept=".pdf,.jpg,.jpeg,.png" aria-label="Select @d.DocumentType.DisplayName() file" required />
-                                <button class="btn btn-sm btn-outline-primary">@(v == null ? "Upload" : "Replace")</button>
-                            </form>
-                        }
-                        else if (!canEdit)
-                        {
-                            <span class="text-muted small">Uploads are closed for this status</span>
-                        }
-                    </td>
-                </tr>
-            }
-            </tbody>
-        </table>
-    </div>
-</section>
+<!-- One form submits document files, Certificate Type, Remarks, and the application -->
+<form asp-controller="Vendor"
+      asp-action="Submit"
+      method="post"
+      enctype="multipart/form-data"
+      id="vendorApplicationForm">
 
-@if (canEdit)
-{
-    <section class="submit-panel" id="submit-application" aria-label="Submit application">
-        <div><h3>Ready to submit?</h3><p>Review your entries before submitting. Required documents must be provided for the application to be processed.</p><small>Accepted formats: PDF, JPG or PNG · Maximum 3 MB per file.</small></div>
-        <form asp-action="Submit" method="post">
-            <button class="btn btn-success btn-lg">@(Model.Status == ApplicationStatus.Draft ? "Submit application" : "Resubmit corrections") <span aria-hidden="true">→</span></button>
-        </form>
+    @Html.AntiForgeryToken()
+
+    <!-- Required documents -->
+    <section class="portal-panel portal-section"
+             id="required-documents"
+             aria-labelledby="documents-title">
+        <div class="panel-heading">
+            <div>
+                <h3 id="documents-title">Required documents</h3>
+                <p>
+                    Select or replace files below. Selected files, Certificate Type, and Remarks
+                    will be processed when you submit the application.
+                </p>
+            </div>
+
+            <span class="badge text-bg-light border">
+                @Model.Documents.Count() documents
+            </span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Document</th>
+                        <th scope="col">Required</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Remarks</th>
+                        <th scope="col">File</th>
+                        <th scope="col" style="min-width:280px">Select file / Replace</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    @for (var i = 0; i < orderedDocuments.Count; i++)
+                    {
+                        var d = orderedDocuments[i];
+                        var v = d.Versions
+                            .OrderByDescending(x => x.VersionNumber)
+                            .FirstOrDefault();
+                        var rev = v?.Reviews
+                            .OrderByDescending(r => r.ReviewedAt)
+                            .FirstOrDefault();
+                        var canUpload = canEdit &&
+                            (Model.Status == ApplicationStatus.Draft ||
+                             d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+
+                        <tr>
+                            <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
+                            <td>@(d.IsRequired ? "Yes" : "No")</td>
+                            <td>
+                                <span class="badge bg-@d.Status.Badge()">@d.Status</span>
+                            </td>
+                            <td class="text-danger">
+                                @(d.Status == DocumentStatus.Rejected ? rev?.Remarks : null)
+                            </td>
+                            <td>
+                                @if (v != null)
+                                {
+                                    <a asp-controller="Documents"
+                                       asp-action="Get"
+                                       asp-route-id="@v.DocumentVersionId"
+                                       target="_blank"
+                                       rel="noopener">View v@(v.VersionNumber)</a>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">Not uploaded</span>
+                                }
+                            </td>
+                            <td>
+                                @if (canEdit)
+                                {
+                                    <input type="hidden"
+                                           name="Uploads[@i].DocumentType"
+                                           value="@d.DocumentType" />
+                                }
+
+                                @if (canUpload)
+                                {
+                                    <input type="file"
+                                           name="Uploads[@i].File"
+                                           class="form-control form-control-sm"
+                                           accept=".pdf,.jpg,.jpeg,.png"
+                                           aria-label="Select @d.DocumentType.DisplayName() file" />
+                                }
+                                else if (canEdit)
+                                {
+                                    <span class="text-muted small">
+                                        Upload unavailable for this document status
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted small">Uploads are closed for this status</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
     </section>
-}
+
+    <!-- Certificate Type and Remarks -->
+    <section class="portal-panel portal-section vendor-registration-details"
+             id="vendor-registration-details"
+             aria-labelledby="vendor-details-title">
+        <div class="panel-heading">
+            <div>
+                <h3 id="vendor-details-title">Additional details</h3>
+                <p>Select your certificate type and enter remarks, if applicable.</p>
+            </div>
+        </div>
+
+        <div class="p-3">
+            @if (canEdit)
+            {
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label for="Cert_Type" class="form-label">Certificate Type</label>
+                        <select id="Cert_Type"
+                                name="Cert_Type"
+                                class="form-select"
+                                required>
+                            <option value="">-- Select Certificate Type --</option>
+                            @if (Model.VendorProfile.Cert_Type == "Admin")
+                            {
+                                <option value="Admin" selected>Admin</option>
+                            }
+                            else
+                            {
+                                <option value="Admin">Admin</option>
+                            }
+                            @if (Model.VendorProfile.Cert_Type == "Material")
+                            {
+                                <option value="Material" selected>Material</option>
+                            }
+                            else
+                            {
+                                <option value="Material">Material</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-md-8">
+                        <label for="Remarks" class="form-label">Remarks</label>
+                        <textarea id="Remarks"
+                                  name="Remarks"
+                                  class="form-control"
+                                  rows="3"
+                                  maxlength="5000"
+                                  placeholder="Enter remarks (maximum 100 words)"
+                                  aria-describedby="remarksWordCount remarksError">@(Model.VendorProfile.Remarks ?? "")</textarea>
+
+                        <div class="d-flex justify-content-between flex-wrap gap-1 mt-1">
+                            <small class="text-muted" id="remarksWordCount" aria-live="polite">0 / 100 words</small>
+                            <small class="text-danger" id="remarksError" role="alert"></small>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <span class="summary-label">Certificate Type</span>
+                        <span class="summary-value">
+                            @(string.IsNullOrWhiteSpace(Model.VendorProfile.Cert_Type)
+                                ? "Not provided"
+                                : Model.VendorProfile.Cert_Type)
+                        </span>
+                    </div>
+                    <div class="col-md-8">
+                        <span class="summary-label">Remarks</span>
+                        <div class="summary-value" style="white-space:pre-wrap;overflow-wrap:anywhere">
+                            @(string.IsNullOrWhiteSpace(Model.VendorProfile.Remarks)
+                                ? "No remarks provided"
+                                : Model.VendorProfile.Remarks)
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+
+    <!-- The single submit button -->
+    @if (canEdit)
+    {
+        <section class="submit-panel" id="submit-application" aria-label="Submit application">
+            <div>
+                <h3>Ready to submit?</h3>
+                <p>
+                    Review your entries before submitting. Required documents must be provided
+                    for the application to be processed.
+                </p>
+                <small>Accepted formats: PDF, JPG or PNG · Maximum 3 MB per file.</small>
+            </div>
+
+            <button type="submit" class="btn btn-success btn-lg" id="submitApplicationButton">
+                @(Model.Status == ApplicationStatus.Draft
+                    ? "Submit application"
+                    : "Resubmit corrections")
+                <span aria-hidden="true">→</span>
+            </button>
+        </section>
+    }
+</form>
+
+<!-- Remarks word counter: client-side convenience; server must also validate 100 words -->
+<script>
+    (function () {
+        const form = document.getElementById("vendorApplicationForm");
+        const remarks = document.getElementById("Remarks");
+        const counter = document.getElementById("remarksWordCount");
+        const error = document.getElementById("remarksError");
+        const submitButton = document.getElementById("submitApplicationButton");
+        const maxWords = 100;
+
+        if (!form) return;
+
+        function countWords(value) {
+            const matches = value.match(
+                /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu
+            );
+
+            return matches ? matches.length : 0;
+        }
+
+        function updateWordCount() {
+            if (!remarks || !counter || !error) return 0;
+
+            const count = countWords(remarks.value);
+            counter.textContent = `${count} / ${maxWords} words`;
+
+            if (count > maxWords) {
+                error.textContent = "Remarks cannot exceed 100 words.";
+                counter.classList.add("text-danger");
+            } else {
+                error.textContent = "";
+                counter.classList.remove("text-danger");
+            }
+
+            return count;
+        }
+
+        if (remarks) {
+            remarks.addEventListener("input", updateWordCount);
+            updateWordCount();
+        }
+
+        form.addEventListener("submit", function (event) {
+            if (remarks && updateWordCount() > maxWords) {
+                event.preventDefault();
+                remarks.focus();
+                return;
+            }
+
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = "Processing application...";
+            }
+        });
+    })();
+</script>

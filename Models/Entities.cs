@@ -19,7 +19,30 @@ public class VendorProfile
     [Required, MaxLength(10)] public string PanNumber { get; set; } = default!;
     [Required, MaxLength(15)] public string MobileNumber { get; set; } = default!;
     [Required, MaxLength(15)] public string GstNumber { get; set; } = default!;
+
+    [Required(ErrorMessage = "District is required for certificate generation.")]
+    [MaxLength(100)]
+    public string District { get; set; } = default!;
+
+    [MaxLength(10)]
+    public string? Gender { get; set; }
+
+    [MaxLength(20)]
+    public string? DOB { get; set; }
+
+    [MaxLength(150)]
+    public string? Father_Husband_Name { get; set; }
+
+    [MaxLength(450)]
+    public string? Trade_Address { get; set; }
+
     [MaxLength(150)] public string? TradeName { get; set; }
+
+    [MaxLength(50)]
+    public string? Cert_Type { get; set; }
+
+    public string? Remarks { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public List<VendorApplication> Applications { get; set; } = new();
 }

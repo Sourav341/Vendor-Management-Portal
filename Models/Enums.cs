@@ -7,7 +7,7 @@ public enum ReviewDecision { Approved, Rejected }
 public enum DocumentType
 {
     ProprietorshipDocument, PanCard, GstCertificate, TradeLicense, BankPassbook,
-    Affidavit, ProfilePhoto, MiningDocument, Itr3Years, StockRegister
+    Affidavit, ProfilePhoto, MiningDocument, Itr3Years, StockRegister, ShopPicture
 }
 
 public static class EnumExtensions
@@ -19,11 +19,12 @@ public static class EnumExtensions
         DocumentType.GstCertificate => "GST certificate",
         DocumentType.TradeLicense => "Trade license",
         DocumentType.BankPassbook => "Bank passbook",
-        DocumentType.Affidavit => "Affidavit",
+        DocumentType.Affidavit => "Affidavit(BlackList Certificate)",
         DocumentType.ProfilePhoto => "Profile photo",
         DocumentType.MiningDocument => "Mining document",
         DocumentType.Itr3Years => "ITR for previous 3 years",
         DocumentType.StockRegister => "Stock register",
+        DocumentType.ShopPicture => "Shop Picture",
         _ => t.ToString()
     };
 
