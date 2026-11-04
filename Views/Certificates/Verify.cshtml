@@ -1,0 +1,100 @@
+@model VendorPortal.ViewModels.CertificateVerificationViewModel
+
+@{
+    ViewData["Title"] = "Certificate Verification";
+
+    var statusClass = Model.Status switch
+    {
+        "VALID" => "text-bg-success",
+        "EXPIRED" => "text-bg-warning",
+        "REVOKED" => "text-bg-danger",
+        _ => "text-bg-secondary"
+    };
+
+    var statusMessage = Model.Status switch
+    {
+        "VALID" => "This certificate is valid and has not been revoked.",
+        "EXPIRED" => "This certificate has expired and is no longer valid.",
+        "REVOKED" => "This certificate has been revoked and must not be accepted.",
+        _ => "The certificate status could not be determined."
+    };
+}
+
+<div class="container py-4 py-lg-5">
+    <div class="row justify-content-center">
+        <div class="col-12 col-lg-9 col-xl-8">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <div class="text-center mb-4">
+                        <p class="text-uppercase text-muted small fw-semibold mb-2">
+                            Government of Jharkhand
+                        </p>
+                        <h1 class="h3 fw-bold mb-2">Certificate Verification</h1>
+                        <p class="text-muted mb-3">
+                            VB-GRAMG Vendor Management Portal
+                        </p>
+                        <span class="badge rounded-pill @statusClass px-3 py-2">
+                            @Model.Status
+                        </span>
+                        <p class="mt-3 mb-0">@statusMessage</p>
+                    </div>
+
+                    <hr class="my-4" />
+
+                    <h2 class="h5 fw-semibold mb-3">Certificate Details</h2>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Certificate Number</div>
+                            <div class="fw-semibold">@Model.CertificateNumber</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">UCAN</div>
+                            <div class="fw-semibold">@Model.UcanNumber</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Issue Date</div>
+                            <div class="fw-semibold">@Model.IssuedAtUtc.ToLocalTime().ToString("dd MMMM yyyy")</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Valid Until</div>
+                            <div class="fw-semibold">@Model.ValidUntilUtc.ToLocalTime().ToString("dd MMMM yyyy")</div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" />
+
+                    <h2 class="h5 fw-semibold mb-3">Vendor Details</h2>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Name of Bidder / Contractor</div>
+                            <div class="fw-semibold">@Model.VendorName</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Company / Firm Name</div>
+                            <div class="fw-semibold">@(string.IsNullOrWhiteSpace(Model.CompanyFirmName) ? "—" : Model.CompanyFirmName)</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">District</div>
+                            <div class="fw-semibold">@Model.District</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Registration Type</div>
+                            <div class="fw-semibold">@(string.IsNullOrWhiteSpace(Model.RegistrationType) ? "—" : Model.RegistrationType)</div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-light border mt-4 mb-0" role="note">
+                        <div class="small text-muted">
+                            This page displays limited information to verify the authenticity and current validity of the certificate.
+                            Personal contact details, PAN and GST information are not displayed.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <p class="text-center text-muted small mt-3 mb-0">
+                Verify that the certificate number and vendor details match the document presented.
+            </p>
+        </div>
+    </div>
+</div>

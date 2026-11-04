@@ -1,4 +1,3 @@
-
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
@@ -36,6 +35,83 @@ public class VendorController : Controller
         var application = await _apps.GetForVendorAsync(UserId);
 
         return View(application);
+    }
+
+    // ---------------- Vendor Profile ----------------
+
+    [HttpGet]
+    public async Task<IActionResult> Profile()
+    {
+        // Load the latest application, including its review history and uploaded documents.
+        var application = await _apps.GetForVendorAsync(UserId);
+
+        var profile = await _db.VendorProfiles
+            .AsNoTracking()
+            .Include(p => p.User)
+            .SingleOrDefaultAsync(p => p.UserId == UserId);
+
+        if (profile == null)
+        {
+            return NotFound("Vendor profile not found.");
+        }
+
+        // Share the real application status with the Profile view.
+        ViewBag.ApplicationStatus = application.Status;
+        ViewBag.ApplicationSubmittedAt = application.SubmittedAt;
+
+        // Show the latest Admin decision/review remarks, when available.
+        ViewBag.LatestDecisionRemarks = application.DecisionHistory
+            .OrderByDescending(h => h.DecidedAt)
+            .Select(h => h.Remarks)
+            .FirstOrDefault(remarks => !string.IsNullOrWhiteSpace(remarks));
+
+        // Reuse the latest uploaded ProfilePhoto document version.
+        var profilePhotoVersion = application.Documents
+            .Where(d => d.DocumentType == DocumentType.ProfilePhoto)
+            .SelectMany(d => d.Versions)
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
+
+        // Documents/Get already serves vendor document versions securely.
+        ViewBag.ProfilePhotoUrl = profilePhotoVersion == null
+            ? null
+            : Url.Action("Get", "Documents", new { id = profilePhotoVersion.DocumentVersionId });
+
+        // Load the latest certificate issued for this vendor, if one exists.
+        // Only the fields needed by the Profile page are selected.
+        var latestCertificate = await _db.VendorCertificates
+            .AsNoTracking()
+            .Where(c => c.VendorProfileId == profile.VendorProfileId)
+            .OrderByDescending(c => c.IssuedAtUtc)
+            .ThenByDescending(c => c.VendorCertificateId)
+            .Select(c => new
+            {
+                c.VendorCertificateId,
+                c.CertificateNumber,
+                c.VerificationToken,
+                c.IssuedAtUtc,
+                c.ValidUntilUtc,
+                c.DownloadCount,
+                c.MaxDownloads,
+                c.IsRevoked
+            })
+            .FirstOrDefaultAsync();
+
+        ViewBag.CertificateId = latestCertificate?.VendorCertificateId;
+        ViewBag.CertificateNumber = latestCertificate?.CertificateNumber;
+        ViewBag.CertificateIssuedAtUtc = latestCertificate?.IssuedAtUtc;
+        ViewBag.CertificateValidUntilUtc = latestCertificate?.ValidUntilUtc;
+        ViewBag.CertificateDownloadCount = latestCertificate?.DownloadCount ?? 0;
+        ViewBag.CertificateMaxDownloads = latestCertificate?.MaxDownloads ?? 5;
+        ViewBag.CertificateIsRevoked = latestCertificate?.IsRevoked ?? false;
+        ViewBag.CertificateVerificationUrl = latestCertificate == null
+            ? null
+            : Url.Action(
+                "Verify",
+                "Certificates",
+                new { token = latestCertificate.VerificationToken });
+
+        return View(profile);
     }
 
     // ---------------- Update Certificate Type and Remarks ----------------
@@ -148,7 +224,6 @@ public class VendorController : Controller
     }
 
     // ---------------- Submit Application ----------------
-
 
     [HttpPost]
     [ValidateAntiForgeryToken]
@@ -312,5 +387,4 @@ public class VendorController : Controller
 
         return RedirectToAction(nameof(Dashboard));
     }
-
 }

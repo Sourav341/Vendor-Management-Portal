@@ -48,6 +48,15 @@
     </div>
 
     <div class="summary-item">
+        <span class="summary-label">UCAN Number</span>
+        <span class="summary-value">
+            @(string.IsNullOrWhiteSpace(Model.VendorProfile.UcanNumber)
+                ? "Not generated yet"
+                : Model.VendorProfile.UcanNumber)
+        </span>
+    </div>
+
+    <div class="summary-item">
         <span class="summary-label">Next step</span>
         <span class="summary-value">
             @(canEdit ? "Complete documents and submit" : "Check application updates")

@@ -20,8 +20,12 @@ public class AccountController : Controller
     private readonly IAppEmailSender _email;
     private readonly IHostEnvironment _env;
 
-    public AccountController(UserManager<ApplicationUser> users, SignInManager<ApplicationUser> signIn,
-        ApplicationDbContext db, IAppEmailSender email, IHostEnvironment env)
+    public AccountController(
+        UserManager<ApplicationUser> users,
+        SignInManager<ApplicationUser> signIn,
+        ApplicationDbContext db,
+        IAppEmailSender email,
+        IHostEnvironment env)
     {
         _users = users;
         _signIn = signIn;
@@ -30,50 +34,39 @@ public class AccountController : Controller
         _env = env;
     }
 
-    // ---------------- Register (no email verification) ----------------
-
-
-
-    private static readonly string[] JharkhandDistricts =
-    {
-    "Bokaro",
-    "Chatra",
-    "Deoghar",
-    "Dhanbad",
-    "Dumka",
-    "East Singhbhum",
-    "Garhwa",
-    "Giridih",
-    "Godda",
-    "Gumla",
-    "Hazaribagh",
-    "Jamtara",
-    "Khunti",
-    "Koderma",
-    "Latehar",
-    "Lohardaga",
-    "Pakur",
-    "Palamu",
-    "Ramgarh",
-    "Ranchi",
-    "Sahibganj",
-    "Seraikela-Kharsawan",
-    "Simdega",
-    "West Singhbhum"
-};
+    // ---------------- Register ----------------
 
     private static readonly string[] GenderOptions =
     {
-    "Male",
-    "Female",
-    "Other"
-};
+        "Male",
+        "Female",
+        "Other"
+    };
 
-    private void LoadRegistrationDropdowns(RegisterViewModel? model = null)
+    /// <summary>
+    /// Loads distinct district names and their codes from the existing
+    /// government master table. The vendor sees district names only;
+    /// DistrictCode is used as the dropdown value for server-side lookup.
+    /// </summary>
+    private async Task LoadRegistrationDropdownsAsync(RegisterViewModel? model = null)
     {
+        var districts = await _db.MasterDistricts
+            .AsNoTracking()
+            .Where(d => d.DistrictCode > 0 && d.DistrictName != "")
+            .Select(d => new
+            {
+                d.DistrictCode,
+                d.DistrictName
+            })
+            .Distinct()
+            .OrderBy(d => d.DistrictName)
+            .ToListAsync();
+
         ViewBag.Districts = new SelectList(
-            JharkhandDistricts,
-            model?.District
+            districts,
+            nameof(MasterDistrict.DistrictCode),
+            nameof(MasterDistrict.DistrictName),
+            model?.DistrictCode
         );
 
         ViewBag.Genders = new SelectList(
@@ -83,35 +76,62 @@ public class AccountController : Controller
     }
 
     [HttpGet, AllowAnonymous]
-    public IActionResult Register()
+    public async Task<IActionResult> Register()
     {
         var model = new RegisterViewModel();
-
-        LoadRegistrationDropdowns(model);
-
+        await LoadRegistrationDropdownsAsync(model);
         return View(model);
     }
 
     [HttpPost, AllowAnonymous]
     public async Task<IActionResult> Register(RegisterViewModel m)
     {
-        // Validate the district selection.
-        if (string.IsNullOrWhiteSpace(m.District) ||
-            !JharkhandDistricts.Contains(
-                m.District,
-                StringComparer.OrdinalIgnoreCase))
+        // Resolve the selected DistrictCode against the government master table.
+        // Only the district name is saved in VendorProfile. The code remains
+        // available in the master table for the future UCAN generation step.
+        string? selectedDistrictName = null;
+
+        if (m.DistrictCode <= 0)
         {
             ModelState.AddModelError(
-                nameof(m.District),
-                "Please select a valid Jharkhand district."
+                nameof(m.DistrictCode),
+                "Please select a valid district."
             );
+        }
+        else
+        {
+            var districtNames = await _db.MasterDistricts
+                .AsNoTracking()
+                .Where(d => d.DistrictCode == m.DistrictCode)
+                .Select(d => d.DistrictName)
+                .Distinct()
+                .ToListAsync();
+
+            if (districtNames.Count == 0)
+            {
+                ModelState.AddModelError(
+                    nameof(m.DistrictCode),
+                    "The selected district is not available in the master list."
+                );
+            }
+            else if (districtNames.Count > 1)
+            {
+                // A district code should map to one district name, even though
+                // the code is repeated for its blocks, panchayats and villages.
+                ModelState.AddModelError(
+                    nameof(m.DistrictCode),
+                    "The district master data contains conflicting names for this code. Please contact the administrator."
+                );
+            }
+            else
+            {
+                selectedDistrictName = districtNames[0];
+            }
         }
 
         // Validate gender when supplied.
         if (!string.IsNullOrWhiteSpace(m.Gender) &&
-            !GenderOptions.Contains(
-                m.Gender,
-                StringComparer.OrdinalIgnoreCase))
+            !GenderOptions.Contains(m.Gender, StringComparer.OrdinalIgnoreCase))
         {
             ModelState.AddModelError(
                 nameof(m.Gender),
@@ -121,12 +141,13 @@ public class AccountController : Controller
 
         if (!ModelState.IsValid)
         {
-            LoadRegistrationDropdowns(m);
+            await LoadRegistrationDropdownsAsync(m);
             return View(m);
         }
 
         var pan = m.PanNumber.Trim().ToUpperInvariant();
         var gst = m.GstNumber.Trim().ToUpperInvariant();
+        var mobile = m.MobileNumber.Trim();
 
         if (await _db.VendorProfiles.AnyAsync(p => p.PanNumber == pan))
         {
@@ -146,7 +167,7 @@ public class AccountController : Controller
 
         if (!ModelState.IsValid)
         {
-            LoadRegistrationDropdowns(m);
+            await LoadRegistrationDropdownsAsync(m);
             return View(m);
         }
 
@@ -156,7 +177,7 @@ public class AccountController : Controller
         {
             UserName = email,
             Email = email,
-            PhoneNumber = m.MobileNumber,
+            PhoneNumber = mobile,
             EmailConfirmed = true
         };
 
@@ -166,13 +187,10 @@ public class AccountController : Controller
         {
             foreach (var error in result.Errors)
             {
-                ModelState.AddModelError(
-                    string.Empty,
-                    error.Description
-                );
+                ModelState.AddModelError(string.Empty, error.Description);
             }
 
-            LoadRegistrationDropdowns(m);
+            await LoadRegistrationDropdownsAsync(m);
             return View(m);
         }
 
@@ -182,40 +200,34 @@ public class AccountController : Controller
         {
             foreach (var error in roleResult.Errors)
             {
-                ModelState.AddModelError(
-                    string.Empty,
-                    error.Description
-                );
+                ModelState.AddModelError(string.Empty, error.Description);
             }
 
             await _users.DeleteAsync(user);
-
-            LoadRegistrationDropdowns(m);
+            await LoadRegistrationDropdownsAsync(m);
             return View(m);
         }
 
-        _db.VendorProfiles.Add(new VendorProfile
+        // Store only the district name in VendorProfiles.
+        // The selected DistrictCode is deliberately NOT stored in VendorProfile.
+        // UCAN generation later can look up the code from tbl_Master_district
+        // using this verified district name.
+        var vendorProfile = new VendorProfile
         {
             UserId = user.Id,
             FullName = m.FullName.Trim(),
             PanNumber = pan,
             GstNumber = gst,
-            MobileNumber = m.MobileNumber,
-
-            // Additional vendor profile fields
+            MobileNumber = mobile,
+            District = selectedDistrictName!,
             TradeName = m.TradeName?.Trim(),
-            District = JharkhandDistricts.First(
-                d => string.Equals(
-                    d,
-                    m.District,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            ),
             Gender = m.Gender,
             DOB = m.DOB,
             Father_Husband_Name = m.Father_Husband_Name?.Trim(),
             Trade_Address = m.Trade_Address?.Trim()
-        });
+        };
+
+        _db.VendorProfiles.Add(vendorProfile);
 
         try
         {
@@ -223,14 +235,16 @@ public class AccountController : Controller
         }
         catch (DbUpdateException)
         {
+            // Remove the newly created Identity user if its profile could not
+            // be saved, preventing an orphaned login account.
             await _users.DeleteAsync(user);
 
             ModelState.AddModelError(
                 string.Empty,
-                "Registration failed. Please verify your registration details."
+                "Registration failed. Please verify your registration details and try again."
             );
 
-            LoadRegistrationDropdowns(m);
+            await LoadRegistrationDropdownsAsync(m);
             return View(m);
         }
 
@@ -239,8 +253,6 @@ public class AccountController : Controller
 
         return RedirectToAction(nameof(Login));
     }
-
-
 
     // ---------------- Login / Logout ----------------
 
@@ -255,26 +267,40 @@ public class AccountController : Controller
     public async Task<IActionResult> Login(LoginViewModel m, string? returnUrl = null)
     {
         ViewData["ReturnUrl"] = returnUrl;
-        if (!ModelState.IsValid) return View(m);
+
+        if (!ModelState.IsValid)
+            return View(m);
 
         var user = await _users.FindByEmailAsync(m.Email.Trim());
 
         var result = await _signIn.PasswordSignInAsync(
-            user?.UserName ?? m.Email, m.Password, m.RememberMe, lockoutOnFailure: true);
+            user?.UserName ?? m.Email,
+            m.Password,
+            m.RememberMe,
+            lockoutOnFailure: true
+        );
 
         if (result.Succeeded)
         {
-            if (Url.IsLocalUrl(returnUrl)) return Redirect(returnUrl!);
+            if (Url.IsLocalUrl(returnUrl))
+                return Redirect(returnUrl!);
 
-            return await _users.IsInRoleAsync(user!, "Admin")
+            return user != null && await _users.IsInRoleAsync(user, "Admin")
                 ? RedirectToAction("Index", "Admin")
                 : RedirectToAction("Dashboard", "Vendor");
         }
 
         if (result.IsLockedOut)
-            ModelState.AddModelError(string.Empty, "Account locked after too many failed attempts. Try again in 15 minutes.");
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                "Account locked after too many failed attempts. Try again in 15 minutes."
+            );
+        }
         else
+        {
             ModelState.AddModelError(string.Empty, "Invalid email or password.");
+        }
 
         return View(m);
     }
@@ -299,21 +325,31 @@ public class AccountController : Controller
     [HttpPost, AllowAnonymous]
     public async Task<IActionResult> ForgotPassword(ForgotPasswordViewModel m)
     {
-        if (!ModelState.IsValid) return View(m);
+        if (!ModelState.IsValid)
+            return View(m);
 
         string? devLink = null;
         var user = await _users.FindByEmailAsync(m.Email.Trim());
+
         if (user != null)
         {
             var token = await _users.GeneratePasswordResetTokenAsync(user);
             var code = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(token));
-            var link = Url.Action(nameof(ResetPassword), "Account",
-                new { code, email = user.Email }, Request.Scheme)!;
+            var link = Url.Action(
+                nameof(ResetPassword),
+                "Account",
+                new { code, email = user.Email },
+                Request.Scheme
+            )!;
 
-            await _email.SendAsync(user.Email!, "Reset your password",
-                $"Reset your password by <a href='{link}'>clicking here</a>.");
+            await _email.SendAsync(
+                user.Email!,
+                "Reset your password",
+                $"Reset your password by <a href='{link}'>clicking here</a>."
+            );
 
-            if (_env.IsDevelopment()) devLink = link;
+            if (_env.IsDevelopment())
+                devLink = link;
         }
 
         return View("ForgotPasswordConfirmation", devLink);
@@ -322,25 +358,32 @@ public class AccountController : Controller
     [HttpGet, AllowAnonymous]
     public IActionResult ResetPassword(string? code, string? email)
     {
-        if (code == null || email == null) return RedirectToAction(nameof(Login));
+        if (code == null || email == null)
+            return RedirectToAction(nameof(Login));
+
         return View(new ResetPasswordViewModel { Code = code, Email = email });
     }
 
     [HttpPost, AllowAnonymous]
     public async Task<IActionResult> ResetPassword(ResetPasswordViewModel m)
     {
-        if (!ModelState.IsValid) return View(m);
+        if (!ModelState.IsValid)
+            return View(m);
 
         var user = await _users.FindByEmailAsync(m.Email);
-        if (user == null) return RedirectToAction(nameof(ResetPasswordDone));
+        if (user == null)
+            return RedirectToAction(nameof(ResetPasswordDone));
 
         try
         {
             var token = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(m.Code));
             var result = await _users.ResetPasswordAsync(user, token, m.Password);
-            if (result.Succeeded) return RedirectToAction(nameof(ResetPasswordDone));
 
-            foreach (var e in result.Errors) ModelState.AddModelError(string.Empty, e.Description);
+            if (result.Succeeded)
+                return RedirectToAction(nameof(ResetPasswordDone));
+
+            foreach (var error in result.Errors)
+                ModelState.AddModelError(string.Empty, error.Description);
         }
         catch (FormatException)
         {

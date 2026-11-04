@@ -541,7 +541,7 @@ a {
 
 .summary-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: .85rem;
     margin-bottom: 1.4rem;
 }
@@ -2647,4 +2647,126 @@ body.portal-shell .public-workspace .portal-topbar-inner {
             padding-right: calc(var(--bs-gutter-x) * .5);
             padding-left: calc(var(--bs-gutter-x) * .5);
         }
+}
+
+/* --------------------------------------------------------------------------
+   Admin application details: electronic certificate issuance panel
+   -------------------------------------------------------------------------- */
+.page-main .portal-panel[aria-labelledby="certificate-issue-title"] {
+    margin-bottom: 1.5rem;
+}
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .panel-heading {
+        padding: 1.15rem 1.35rem;
+        border-bottom: 1px solid #e5ece8;
+        background: #fbfdfc;
+    }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex {
+        min-height: 88px;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 1rem 1.5rem !important;
+        padding: 1.15rem 1.35rem;
+        border-top: 1px solid #edf1ef;
+        background: linear-gradient(105deg, #f8fbf9 0%, #ffffff 78%);
+    }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex > div:first-child {
+            min-width: 0;
+            flex: 1 1 320px;
+            padding-left: .9rem;
+            border-left: 3px solid var(--gov-green);
+        }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex .fw-semibold {
+            margin-bottom: .22rem;
+            color: #183b2d;
+            font-size: .96rem;
+            font-weight: 800 !important;
+            line-height: 1.35;
+        }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex .text-muted {
+            display: block;
+            max-width: 760px;
+            color: #64748b !important;
+            font-size: .84rem;
+            line-height: 1.5;
+        }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex form {
+            flex: 0 0 auto;
+            margin: 0;
+        }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex .btn-success {
+            display: inline-flex;
+            min-height: 42px;
+            align-items: center;
+            justify-content: center;
+            padding: .62rem 1.1rem;
+            border: 1px solid var(--gov-green);
+            border-radius: 7px;
+            color: #fff;
+            background: var(--gov-green);
+            box-shadow: 0 3px 8px rgba(8, 123, 82, .12);
+            font-size: .86rem;
+            font-weight: 750;
+            white-space: nowrap;
+            transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+        }
+
+            .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex .btn-success:hover {
+                border-color: var(--gov-green-strong);
+                background: var(--gov-green-strong);
+                box-shadow: 0 5px 12px rgba(8, 123, 82, .17);
+                transform: translateY(-1px);
+            }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .alert {
+        margin: 0 !important;
+        padding: 1rem 1.35rem;
+        border: 0;
+        border-top: 1px solid #edf1ef;
+        border-radius: 0 0 var(--gov-radius) var(--gov-radius);
+        font-size: .87rem;
+        line-height: 1.5;
+    }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .alert-success {
+        color: #24563d;
+        background: #f0f9f3;
+    }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .alert-warning {
+        color: #765216;
+        background: #fff9eb;
+    }
+
+@media (max-width: 575.98px) {
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .panel-heading {
+        padding: 1rem;
+    }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex {
+        min-height: 0;
+        align-items: stretch !important;
+        flex-direction: column;
+        gap: .9rem !important;
+        padding: 1rem;
+    }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex > div:first-child {
+            flex-basis: auto;
+        }
+
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex form,
+        .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .d-flex .btn-success {
+            width: 100%;
+        }
+
+    .page-main .portal-panel[aria-labelledby="certificate-issue-title"] > .alert {
+        padding: .9rem 1rem;
+    }
 }

@@ -11,8 +11,10 @@ public class RegisterViewModel
     private string _gst = "";
     private string _mobile = "";
 
-    [Required(ErrorMessage = "PAN number is required."), Display(Name = "PAN number")]
-    [RegularExpression(@"^[A-Z]{5}[0-9]{4}[A-Z]$",
+    [Required(ErrorMessage = "PAN number is required.")]
+    [Display(Name = "PAN number")]
+    [RegularExpression(
+        @"^[A-Z]{5}[0-9]{4}[A-Z]$",
         ErrorMessage = "PAN must be 10 characters: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F).")]
     public string PanNumber
     {
@@ -20,8 +22,10 @@ public class RegisterViewModel
         set => _pan = (value ?? "").Trim().ToUpperInvariant();
     }
 
-    [Required(ErrorMessage = "Mobile number is required."), Display(Name = "Mobile number")]
-    [RegularExpression(@"^[6-9][0-9]{9}$",
+    [Required(ErrorMessage = "Mobile number is required.")]
+    [Display(Name = "Mobile number")]
+    [RegularExpression(
+        @"^[6-9][0-9]{9}$",
         ErrorMessage = "Enter a 10-digit mobile number starting with 6, 7, 8 or 9.")]
     public string MobileNumber
     {
@@ -29,8 +33,10 @@ public class RegisterViewModel
         set => _mobile = (value ?? "").Replace(" ", "").Replace("-", "").Trim();
     }
 
-    [Required(ErrorMessage = "GST number is required."), Display(Name = "GST number")]
-    [RegularExpression(@"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",
+    [Required(ErrorMessage = "GST number is required.")]
+    [Display(Name = "GST number")]
+    [RegularExpression(
+        @"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",
         ErrorMessage = "GSTIN must be 15 characters (e.g. 22ABCDE1234F1Z5).")]
     public string GstNumber
     {
@@ -38,13 +44,15 @@ public class RegisterViewModel
         set => _gst = (value ?? "").Trim().ToUpperInvariant();
     }
 
-    [Required, EmailAddress, Display(Name = "Email address")]
+    [Required, EmailAddress]
+    [Display(Name = "Email address")]
     public string Email { get; set; } = "";
 
-    [Required(ErrorMessage = "Please select a district.")]
+    // Used internally by the District dropdown.
+    // Vendor sees the District name, not the numeric code.
+    [Range(1, int.MaxValue, ErrorMessage = "Please select a valid district.")]
     [Display(Name = "District")]
-    public string District { get; set; } = "";
-
+    public int DistrictCode { get; set; }
 
     [StringLength(150)]
     [Display(Name = "Trade name")]
@@ -65,11 +73,11 @@ public class RegisterViewModel
     [Display(Name = "Trade address")]
     public string? Trade_Address { get; set; }
 
-
     [Required, DataType(DataType.Password)]
     public string Password { get; set; } = "";
 
-    [Required, DataType(DataType.Password), Display(Name = "Confirm password")]
+    [Required, DataType(DataType.Password)]
+    [Display(Name = "Confirm password")]
     [Compare(nameof(Password), ErrorMessage = "Passwords do not match.")]
     public string ConfirmPassword { get; set; } = "";
 }

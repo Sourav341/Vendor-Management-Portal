@@ -9,12 +9,12 @@
 
         <aside class="auth-intro auth-intro--image">
             <img class="auth-emblem"
-                 src="~/images/jharkhand-state-emblem.png"
+                 src="@Url.Content("~/images/jharkhand-state-emblem.png")"
                  alt="Jharkhand State Emblem"
                  width="50"
                  height="50" />
 
-            <span class="auth-eyebrow">Vendor onboarding</span>
+            <span class="auth-eyebrow">VB-GRAMG Vendor onboarding</span>
 
             <h2>Register your business</h2>
 
@@ -67,15 +67,15 @@
                 <!-- District and Gender -->
                 <div class="row g-3">
                     <div class="col-md-6 mb-2">
-                        <label asp-for="District" class="form-label"></label>
+                        <label asp-for="DistrictCode" class="form-label"></label>
 
-                        <select asp-for="District"
+                        <select asp-for="DistrictCode"
                                 asp-items="ViewBag.Districts"
                                 class="form-select">
-                            <option value="">-- Select District --</option>
+                            <option value="0">-- Select District --</option>
                         </select>
 
-                        <span asp-validation-for="District"
+                        <span asp-validation-for="DistrictCode"
                               class="text-danger"></span>
                     </div>
 
@@ -96,11 +96,9 @@
                 <!-- Date of Birth -->
                 <div class="mb-3">
                     <label asp-for="DOB" class="form-label"></label>
-
                     <input asp-for="DOB"
                            type="date"
                            class="form-control" />
-
                     <span asp-validation-for="DOB"
                           class="text-danger"></span>
                 </div>
@@ -109,10 +107,8 @@
                 <div class="mb-3">
                     <label asp-for="Father_Husband_Name"
                            class="form-label"></label>
-
                     <input asp-for="Father_Husband_Name"
                            class="form-control" />
-
                     <span asp-validation-for="Father_Husband_Name"
                           class="text-danger"></span>
                 </div>
@@ -121,12 +117,10 @@
                 <div class="mb-3">
                     <label asp-for="Trade_Address"
                            class="form-label"></label>
-
                     <textarea asp-for="Trade_Address"
                               class="form-control"
                               rows="3"
                               autocomplete="street-address"></textarea>
-
                     <span asp-validation-for="Trade_Address"
                           class="text-danger"></span>
                 </div>
@@ -136,12 +130,10 @@
                     <div class="col-md-6 mb-2">
                         <label asp-for="PanNumber"
                                class="form-label"></label>
-
                         <input asp-for="PanNumber"
                                class="form-control text-uppercase"
                                maxlength="10"
                                autocomplete="off" />
-
                         <span asp-validation-for="PanNumber"
                               class="text-danger"></span>
                     </div>
@@ -149,13 +141,11 @@
                     <div class="col-md-6 mb-2">
                         <label asp-for="MobileNumber"
                                class="form-label"></label>
-
                         <input asp-for="MobileNumber"
                                class="form-control"
                                maxlength="10"
                                autocomplete="tel"
                                inputmode="numeric" />
-
                         <span asp-validation-for="MobileNumber"
                               class="text-danger"></span>
                     </div>
@@ -164,11 +154,9 @@
                 <!-- Email -->
                 <div class="mb-3">
                     <label asp-for="Email" class="form-label"></label>
-
                     <input asp-for="Email"
                            class="form-control"
                            autocomplete="email" />
-
                     <span asp-validation-for="Email"
                           class="text-danger"></span>
                 </div>
@@ -176,12 +164,10 @@
                 <!-- GST -->
                 <div class="mb-3">
                     <label asp-for="GstNumber" class="form-label"></label>
-
                     <input asp-for="GstNumber"
                            class="form-control text-uppercase"
                            maxlength="15"
                            autocomplete="off" />
-
                     <span asp-validation-for="GstNumber"
                           class="text-danger"></span>
                 </div>
@@ -191,11 +177,9 @@
                     <div class="col-md-6 mb-2">
                         <label asp-for="Password"
                                class="form-label"></label>
-
                         <input asp-for="Password"
                                class="form-control"
                                autocomplete="new-password" />
-
                         <span asp-validation-for="Password"
                               class="text-danger"></span>
                     </div>
@@ -203,11 +187,9 @@
                     <div class="col-md-6 mb-2">
                         <label asp-for="ConfirmPassword"
                                class="form-label"></label>
-
                         <input asp-for="ConfirmPassword"
                                class="form-control"
                                autocomplete="new-password" />
-
                         <span asp-validation-for="ConfirmPassword"
                               class="text-danger"></span>
                     </div>

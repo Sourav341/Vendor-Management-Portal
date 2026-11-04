@@ -1,0 +1,366 @@
+@model VendorProfile
+
+@{
+    ViewData["Title"] = "Vendor Profile";
+
+    var hasUcan = !string.IsNullOrWhiteSpace(Model.UcanNumber);
+    var profilePhotoUrl = ViewBag.ProfilePhotoUrl as string;
+    var applicationStatus = ViewBag.ApplicationStatus?.ToString() ?? "Unknown";
+    var latestRemarks = ViewBag.LatestDecisionRemarks as string;
+    DateTime? submittedAt = ViewBag.ApplicationSubmittedAt as DateTime?;
+
+    var statusLabel = applicationStatus switch
+    {
+        "Draft" => "Draft",
+        "PendingReview" => "Pending Review",
+        "UnderReview" => "Under Review",
+        "CorrectionsRequired" => "Corrections Required",
+        "Approved" => "Approved",
+        "Rejected" => "Rejected",
+        _ => "Status Not Available"
+    };
+
+    var statusCss = applicationStatus switch
+    {
+        "Draft" => "bg-secondary",
+        "PendingReview" => "bg-info text-dark",
+        "UnderReview" => "bg-primary",
+        "CorrectionsRequired" => "bg-warning text-dark",
+        "Approved" => "bg-success",
+        "Rejected" => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    var dobDisplay = DateTime.TryParse(Model.DOB, out var dateOfBirth)
+        ? dateOfBirth.ToString("dd/MM/yyyy")
+        : (string.IsNullOrWhiteSpace(Model.DOB) ? "Not provided" : Model.DOB);
+
+    var registeredAddress = string.Join(", ", new[]
+    {
+        Model.Trade_Address,
+        Model.District
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    var firmName = string.IsNullOrWhiteSpace(Model.TradeName)
+        ? "No Company (Proprietorship / Individual)"
+        : Model.TradeName;
+
+    var registeredEmail = string.IsNullOrWhiteSpace(Model.User?.Email)
+        ? "Not available"
+        : Model.User.Email;
+
+    var registeredMobile = string.IsNullOrWhiteSpace(Model.MobileNumber)
+        ? "Not available"
+        : Model.MobileNumber;
+
+    int? certificateId = ViewBag.CertificateId as int?;
+    var certificateNumber = ViewBag.CertificateNumber as string;
+    DateTime? certificateIssuedAtUtc = ViewBag.CertificateIssuedAtUtc as DateTime?;
+    DateTime? certificateValidUntilUtc = ViewBag.CertificateValidUntilUtc as DateTime?;
+    var certificateDownloadCount = ViewBag.CertificateDownloadCount is int used ? used : 0;
+    var certificateMaxDownloads = ViewBag.CertificateMaxDownloads is int maximum ? maximum : 5;
+    var certificateIsRevoked = ViewBag.CertificateIsRevoked is bool revoked && revoked;
+    var certificateVerificationUrl = ViewBag.CertificateVerificationUrl as string;
+
+    var hasCertificate = certificateId.HasValue && !string.IsNullOrWhiteSpace(certificateNumber);
+    var certificateIsExpired = certificateValidUntilUtc.HasValue
+        && certificateValidUntilUtc.Value <= DateTime.UtcNow;
+    var downloadLimitReached = certificateDownloadCount >= certificateMaxDownloads;
+    var canDownloadCertificate = hasCertificate
+        && !certificateIsRevoked
+        && !certificateIsExpired
+        && !downloadLimitReached;
+
+    var certificateStatusLabel = !hasCertificate
+        ? "Not Issued"
+        : certificateIsRevoked
+            ? "Revoked"
+            : certificateIsExpired
+                ? "Expired"
+                : "Valid";
+
+    var certificateStatusCss = certificateStatusLabel switch
+    {
+        "Valid" => "bg-success",
+        "Expired" => "bg-warning text-dark",
+        "Revoked" => "bg-danger",
+        _ => "bg-secondary"
+    };
+}
+
+<section class="portal-page-heading" aria-labelledby="vendor-profile-title">
+    <div class="d-flex flex-wrap align-items-center gap-3">
+        @if (!string.IsNullOrWhiteSpace(profilePhotoUrl))
+        {
+            <img src="@profilePhotoUrl"
+                 alt="Vendor profile picture"
+                 class="rounded-circle border shadow-sm"
+                 style="width:88px;height:88px;object-fit:cover;" />
+        }
+        else
+        {
+            <div class="rounded-circle border bg-light d-flex align-items-center justify-content-center text-secondary fw-semibold"
+                 style="width:88px;height:88px;font-size:1.8rem;"
+                 aria-label="No profile picture uploaded">
+                @(string.IsNullOrWhiteSpace(Model.FullName) ? "V" : Model.FullName.Trim().Substring(0, 1).ToUpper())
+            </div>
+        }
+
+        <div>
+            <span class="section-eyebrow">Vendor Workspace</span>
+            <h2 id="vendor-profile-title" class="mb-1">Vendor Profile</h2>
+            <p class="mb-1">@Model.FullName</p>
+            <span class="text-muted small">UCAN: @(hasUcan ? Model.UcanNumber : "Not generated yet")</span>
+        </div>
+    </div>
+
+    <div class="status-line mt-3 mt-md-0">
+        Overall application status
+        <span class="badge @statusCss">@statusLabel</span>
+    </div>
+</section>
+
+@if ((applicationStatus == "Rejected" || applicationStatus == "CorrectionsRequired") &&
+     !string.IsNullOrWhiteSpace(latestRemarks))
+{
+    <section class="alert alert-warning mt-3" role="alert">
+        <h3 class="h6 mb-1">Admin Remarks</h3>
+        <p class="mb-0">@latestRemarks</p>
+    </section>
+}
+
+<section class="portal-panel portal-section" aria-labelledby="profile-details-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="profile-details-title">Basic Vendor &amp; Identification Details</h3>
+            <p>Registered details associated with your Vendor Management Portal account.</p>
+        </div>
+    </div>
+
+    <div class="p-3">
+        <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3">
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Name of Bidder / Contractor</span>
+                    <span class="summary-value">@Model.FullName</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Registration Number (UCAN)</span>
+                    <span class="summary-value">@(hasUcan ? Model.UcanNumber : "Not generated yet")</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Company / Firm Name</span>
+                    <span class="summary-value">@firmName</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">PAN Number</span>
+                    <span class="summary-value">@Model.PanNumber</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Father's / Husband's Name</span>
+                    <span class="summary-value">@(string.IsNullOrWhiteSpace(Model.Father_Husband_Name) ? "Not provided" : Model.Father_Husband_Name)</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">GST Number</span>
+                    <span class="summary-value">@Model.GstNumber</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Date of Birth</span>
+                    <span class="summary-value">@dobDisplay</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Gender</span>
+                    <span class="summary-value">@(string.IsNullOrWhiteSpace(Model.Gender) ? "Not provided" : Model.Gender)</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Certificate Validity</span>
+                    <span class="summary-value">
+                        @if (hasCertificate && certificateIssuedAtUtc.HasValue && certificateValidUntilUtc.HasValue)
+                        {
+                            @certificateIssuedAtUtc.Value.ToLocalTime().ToString("dd/MM/yyyy")
+                            <span> – </span>
+                            @certificateValidUntilUtc.Value.ToLocalTime().ToString("dd/MM/yyyy")
+                        }
+                        else
+                        {
+                            <text>Not assigned</text>
+                        }
+                    </span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Registered Address</span>
+                    <span class="summary-value">@(string.IsNullOrWhiteSpace(registeredAddress) ? "Not provided" : registeredAddress)</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">District</span>
+                    <span class="summary-value">@(string.IsNullOrWhiteSpace(Model.District) ? "Not provided" : Model.District)</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Registration Type</span>
+                    <span class="summary-value">@(string.IsNullOrWhiteSpace(Model.Cert_Type) ? "Not provided" : Model.Cert_Type)</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Registered Email</span>
+                    <span class="summary-value">@registeredEmail</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Registered Mobile Number</span>
+                    <span class="summary-value">@registeredMobile</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Application Submitted On</span>
+                    <span class="summary-value">@(submittedAt.HasValue ? submittedAt.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Not submitted")</span>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="summary-item h-100">
+                    <span class="summary-label">Application Status</span>
+                    <span class="summary-value"><span class="badge @statusCss">@statusLabel</span></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="portal-panel portal-section" aria-labelledby="certificate-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="certificate-title">Electronic Certificate</h3>
+            <p>Your certificate is generated automatically after Admin's final approval. Vendors can download it but cannot generate or regenerate it.</p>
+        </div>
+        @if (hasCertificate)
+        {
+            <span class="badge @certificateStatusCss">@certificateStatusLabel</span>
+        }
+    </div>
+
+    <div class="p-3">
+        @if (hasCertificate)
+        {
+            <div class="row row-cols-1 row-cols-md-2 g-3 mb-3">
+                <div class="col">
+                    <div class="summary-item h-100">
+                        <span class="summary-label">Certificate Number</span>
+                        <span class="summary-value">@certificateNumber</span>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="summary-item h-100">
+                        <span class="summary-label">Issue Date</span>
+                        <span class="summary-value">@(certificateIssuedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Not available")</span>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="summary-item h-100">
+                        <span class="summary-label">Valid Until</span>
+                        <span class="summary-value">@(certificateValidUntilUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Not available")</span>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="summary-item h-100">
+                        <span class="summary-label">Downloads Used</span>
+                        <span class="summary-value">@certificateDownloadCount of @certificateMaxDownloads</span>
+                    </div>
+                </div>
+            </div>
+
+            @if (canDownloadCertificate)
+            {
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                    <a class="btn btn-success"
+                       asp-controller="Certificates"
+                       asp-action="Download"
+                       asp-route-id="@certificateId">
+                        Download Certificate (PDF)
+                    </a>
+
+                    @if (!string.IsNullOrWhiteSpace(certificateVerificationUrl))
+                    {
+                        <a class="btn btn-outline-primary"
+                           href="@certificateVerificationUrl"
+                           target="_blank"
+                           rel="noopener noreferrer">
+                            Verify Certificate
+                        </a>
+                    }
+                </div>
+                <p class="text-muted small mt-2 mb-0">
+                    You can download this certificate @((certificateMaxDownloads - certificateDownloadCount)) more time(s) before the download limit is reached.
+                </p>
+            }
+            else if (certificateIsRevoked)
+            {
+                <div class="alert alert-danger mb-0" role="alert">
+                    This certificate has been revoked. Downloads are disabled.
+                </div>
+            }
+            else if (certificateIsExpired)
+            {
+                <div class="alert alert-warning mb-0" role="alert">
+                    This certificate has expired. Downloads are disabled. Submit a renewal application with the required documents.
+                </div>
+            }
+            else if (downloadLimitReached)
+            {
+                <div class="alert alert-warning mb-0" role="alert">
+                    The maximum of @certificateMaxDownloads downloads has been reached. Further downloads are disabled.
+                </div>
+            }
+        }
+        else if (applicationStatus == "Approved")
+        {
+            <div class="alert alert-info mb-0" role="status">
+                Your application is approved, but the certificate record is not available yet. Please contact the portal administrator if this message continues to appear.
+            </div>
+        }
+        else
+        {
+            <p class="text-muted mb-0">
+                Your certificate will be generated automatically after Admin's final approval. The validity period will be three years from the issue date, with a maximum of five downloads.
+            </p>
+        }
+    </div>
+</section>

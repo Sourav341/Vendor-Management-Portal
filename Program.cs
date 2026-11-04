@@ -1,4 +1,3 @@
-
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -52,7 +51,12 @@ builder.Services.ConfigureApplicationCookie(options =>
 
 // ---------------- Application Services ----------------
 
+// CertificateService uses the current HTTP request to build a verification URL
+// unless Certificate:PublicBaseUrl is configured in appsettings.json.
+builder.Services.AddHttpContextAccessor();
+
 builder.Services.AddScoped<FileStorageService>();
+builder.Services.AddScoped<CertificateService>();
 builder.Services.AddScoped<ApplicationService>();
 
 builder.Services.AddSingleton<IAppEmailSender, LoggingEmailSender>();

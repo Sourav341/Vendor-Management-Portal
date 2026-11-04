@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using VendorPortal.Data;
 using VendorPortal.Models;
@@ -8,14 +10,39 @@ public class ApplicationService
 {
     private readonly ApplicationDbContext _db;
     private readonly FileStorageService _files;
+    private readonly CertificateService _certificates;
+    private readonly IWebHostEnvironment _environment;
+
+    private const string UcanPrefix = "JH34";
+    private const int UcanRandomNumberLength = 4;
+    private const int UcanRandomNumberLimit = 10_000;
+    private const int CertificateValidityYears = 2;
+    private const int MaxCertificateDownloads = 5;
+
+    private const string UcanGenerationLockSql = @"
+DECLARE @LockResult INT;
+EXEC @LockResult = sys.sp_getapplock
+    @Resource = N'VendorPortal_UCAN_Number_Generation',
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 15000;
+
+IF @LockResult < 0
+    THROW 51000, 'Could not acquire the UCAN generation lock.', 1;";
 
     private static readonly HashSet<DocumentType> OptionalTypes =
         new() { DocumentType.MiningDocument, DocumentType.Itr3Years, DocumentType.StockRegister };
 
-    public ApplicationService(ApplicationDbContext db, FileStorageService files)
+    public ApplicationService(
+        ApplicationDbContext db,
+        FileStorageService files,
+        CertificateService certificates,
+        IWebHostEnvironment environment)
     {
         _db = db;
         _files = files;
+        _certificates = certificates;
+        _environment = environment;
     }
 
     public async Task EnsureApplicationAsync(string userId)
@@ -131,51 +158,236 @@ public class ApplicationService
     public async Task<string?> FinalDecisionAsync(string adminId, int applicationId, string action, string? remarks)
     {
         await using var tx = await _db.Database.BeginTransactionAsync();
-        var app = await _db.VendorApplications.Include(a => a.Documents)
-            .FirstOrDefaultAsync(a => a.ApplicationId == applicationId);
-        if (app is null) return "Application not found.";
-        if (app.Status is not (ApplicationStatus.PendingReview or ApplicationStatus.UnderReview))
-            return "This application is not open for a decision.";
+        string? generatedPdfStorageKey = null;
 
-        var previous = app.Status;
-        ApplicationStatus next;
-        switch (action)
+        try
         {
-            case "Approve":
-                if (app.Documents.Any(d => d.IsRequired && d.Status != DocumentStatus.Approved))
-                    return "Every required document must be approved first.";
-                next = ApplicationStatus.Approved;
-                break;
-            case "Reject":
-                if (string.IsNullOrWhiteSpace(remarks)) return "Remarks are required to reject an application.";
-                next = ApplicationStatus.Rejected;
-                break;
-            case "RequestCorrections":
-                if (string.IsNullOrWhiteSpace(remarks)) return "Remarks are required when requesting corrections.";
-                if (!app.Documents.Any(d => d.Status == DocumentStatus.Rejected))
-                    return "Reject at least one document before requesting corrections.";
-                next = ApplicationStatus.CorrectionsRequired;
-                break;
-            default:
-                return "Unknown action.";
+            var app = await _db.VendorApplications
+                .Include(a => a.Documents)
+                .Include(a => a.VendorProfile)
+                .FirstOrDefaultAsync(a => a.ApplicationId == applicationId);
+
+            if (app is null) return "Application not found.";
+            if (app.Status is not (ApplicationStatus.PendingReview or ApplicationStatus.UnderReview))
+                return "This application is not open for a decision.";
+
+            var previous = app.Status;
+            var decisionAtUtc = DateTime.UtcNow;
+            ApplicationStatus next;
+
+            switch (action)
+            {
+                case "Approve":
+                    if (app.Documents.Any(d => d.IsRequired && d.Status != DocumentStatus.Approved))
+                        return "Every required document must be approved first.";
+
+                    if (app.VendorProfile is null)
+                        return "Vendor profile not found. UCAN cannot be generated.";
+
+                    // Prevent a second certificate from being issued for the same application.
+                    if (await _db.VendorCertificates.AnyAsync(c => c.ApplicationId == app.ApplicationId))
+                        return "A certificate has already been issued for this application.";
+
+                    // The vendor keeps the same UCAN. It is generated only on the first approval.
+                    var ucanError = await AssignUcanIfMissingAsync(app.VendorProfile);
+                    if (ucanError != null)
+                        return ucanError;
+
+                    next = ApplicationStatus.Approved;
+                    break;
+
+                case "Reject":
+                    if (string.IsNullOrWhiteSpace(remarks))
+                        return "Remarks are required to reject an application.";
+                    next = ApplicationStatus.Rejected;
+                    break;
+
+                case "RequestCorrections":
+                    if (string.IsNullOrWhiteSpace(remarks))
+                        return "Remarks are required when requesting corrections.";
+                    if (!app.Documents.Any(d => d.Status == DocumentStatus.Rejected))
+                        return "Reject at least one document before requesting corrections.";
+                    next = ApplicationStatus.CorrectionsRequired;
+                    break;
+
+                default:
+                    return "Unknown action.";
+            }
+
+            app.Status = next;
+            if (next is ApplicationStatus.Approved or ApplicationStatus.Rejected)
+            {
+                app.FinalDecisionById = adminId;
+                app.FinalDecisionAt = decisionAtUtc;
+            }
+
+            _db.ApplicationDecisionHistories.Add(new ApplicationDecisionHistory
+            {
+                ApplicationId = app.ApplicationId,
+                AdminUserId = adminId,
+                PreviousStatus = previous,
+                NewStatus = next,
+                Remarks = remarks?.Trim()
+            });
+
+            // Certificate generation happens only as part of the Admin's final approval.
+            // Vendors have no call to this method and cannot generate their own certificates.
+            if (next == ApplicationStatus.Approved)
+            {
+                var profile = app.VendorProfile!;
+                var certificate = new VendorCertificate
+                {
+                    VendorProfileId = profile.VendorProfileId,
+                    ApplicationId = app.ApplicationId,
+                    CertificateNumber = CreateCertificateNumber(decisionAtUtc),
+                    VerificationToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+                    PdfStorageKey = string.Empty,
+                    VendorName = profile.FullName,
+                    CompanyFirmName = profile.TradeName,
+                    FatherOrHusbandName = profile.Father_Husband_Name,
+                    DateOfBirth = profile.DOB,
+                    Gender = profile.Gender,
+                    RegisteredAddress = profile.Trade_Address,
+                    District = profile.District,
+                    PanNumber = profile.PanNumber,
+                    GstNumber = profile.GstNumber,
+                    UcanNumber = profile.UcanNumber!,
+                    RegistrationType = profile.Cert_Type,
+                    IssuedAtUtc = decisionAtUtc,
+                    ValidUntilUtc = decisionAtUtc.AddYears(CertificateValidityYears),
+                    MaxDownloads = MaxCertificateDownloads,
+                    DownloadCount = 0,
+                    GeneratedByAdminId = adminId,
+                    IsRevoked = false,
+                    CreatedAtUtc = decisionAtUtc
+                };
+
+                generatedPdfStorageKey = await _certificates.GeneratePdfAsync(certificate);
+                certificate.PdfStorageKey = generatedPdfStorageKey;
+                _db.VendorCertificates.Add(certificate);
+            }
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+            return null;
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            TryDeleteGeneratedCertificateFile(generatedPdfStorageKey);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    private static string CreateCertificateNumber(DateTime issuedAtUtc)
+    {
+        var uniquePart = Guid.NewGuid().ToString("N").ToUpperInvariant();
+        return $"JH34-{issuedAtUtc:yyyy}-{uniquePart}";
+    }
+
+    private void TryDeleteGeneratedCertificateFile(string? storageKey)
+    {
+        if (string.IsNullOrWhiteSpace(storageKey))
+            return;
+
+        try
+        {
+            var certificatesRoot = Path.GetFullPath(Path.Combine(
+                _environment.ContentRootPath, "App_Data", "Certificates"));
+            var certificatePath = Path.GetFullPath(Path.Combine(
+                _environment.ContentRootPath,
+                "App_Data",
+                storageKey.Replace('/', Path.DirectorySeparatorChar)));
+            var rootPrefix = certificatesRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            if (!certificatePath.StartsWith(rootPrefix, comparison))
+                return;
+
+            if (File.Exists(certificatePath))
+                File.Delete(certificatePath);
+        }
+        catch
+        {
+            // Do not replace the original database or certificate-generation exception.
+        }
+    }
+
+    private async Task<string?> AssignUcanIfMissingAsync(VendorProfile profile)
+    {
+        // A vendor receives one permanent UCAN. Never replace an existing value.
+        if (!string.IsNullOrWhiteSpace(profile.UcanNumber))
+            return null;
+
+        if (string.IsNullOrWhiteSpace(profile.District))
+            return "Vendor district is missing. UCAN cannot be generated.";
+
+        // DistrictCode remains in the government master table only.
+        // District_code can repeat across block/panchayat/village rows, so retrieve
+        // the distinct code(s) for the saved district name.
+        var districtCodes = await _db.MasterDistricts
+            .AsNoTracking()
+            .Where(d => d.DistrictName == profile.District)
+            .Select(d => d.DistrictCode)
+            .Distinct()
+            .ToListAsync();
+
+        if (districtCodes.Count == 0)
+            return $"District '{profile.District}' was not found in the district master table.";
+
+        if (districtCodes.Count > 1)
+            return $"District '{profile.District}' maps to multiple district codes. Please correct the master data.";
+
+        var districtCode = districtCodes[0];
+        if (districtCode < 1 || districtCode > 99)
+            return "The district code must be between 1 and 99 to generate a two-digit UCAN district segment.";
+
+        // Serialize UCAN generation so two simultaneous approvals cannot select
+        // the same four-digit suffix. The lock is held until this approval transaction commits.
+        await _db.Database.ExecuteSqlRawAsync(UcanGenerationLockSql);
+
+        // Another approval may have completed while this request was waiting for the generation lock.
+        var currentUcan = await _db.VendorProfiles
+            .AsNoTracking()
+            .Where(p => p.VendorProfileId == profile.VendorProfileId)
+            .Select(p => p.UcanNumber)
+            .SingleAsync();
+
+        if (!string.IsNullOrWhiteSpace(currentUcan))
+        {
+            profile.UcanNumber = currentUcan;
+            return null;
         }
 
-        app.Status = next;
-        if (next is ApplicationStatus.Approved or ApplicationStatus.Rejected)
-        {
-            app.FinalDecisionById = adminId;
-            app.FinalDecisionAt = DateTime.UtcNow;
-        }
-        _db.ApplicationDecisionHistories.Add(new ApplicationDecisionHistory
-        {
-            ApplicationId = app.ApplicationId,
-            AdminUserId = adminId,
-            PreviousStatus = previous,
-            NewStatus = next,
-            Remarks = remarks?.Trim()
-        });
-        await _db.SaveChangesAsync();
-        await tx.CommitAsync();
+        var existingUcans = await _db.VendorProfiles
+            .AsNoTracking()
+            .Where(p => p.UcanNumber != null && p.UcanNumber != "")
+            .Select(p => p.UcanNumber!)
+            .ToListAsync();
+
+        // The four-digit random suffix is globally unique across all districts.
+        var usedRandomNumbers = existingUcans
+            .Where(value => value.Length >= UcanRandomNumberLength)
+            .Select(value => value.Substring(value.Length - UcanRandomNumberLength))
+            .Where(value => value.Length == UcanRandomNumberLength && value.All(char.IsDigit))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var availableRandomNumbers = Enumerable.Range(0, UcanRandomNumberLimit)
+            .Select(number => number.ToString("D4"))
+            .Where(number => !usedRandomNumbers.Contains(number))
+            .ToList();
+
+        if (availableRandomNumbers.Count == 0)
+            return "All four-digit UCAN random numbers have been allocated. No new UCAN can be issued.";
+
+        var randomNumber = availableRandomNumbers[
+            RandomNumberGenerator.GetInt32(availableRandomNumbers.Count)];
+
+        profile.UcanNumber = $"{UcanPrefix}{districtCode:D2}{randomNumber}";
         return null;
     }
 }

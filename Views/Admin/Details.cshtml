@@ -1,10 +1,20 @@
 @model VendorApplication
 @{
     ViewData["Title"] = "Application review";
+
     var open = Model.Status is ApplicationStatus.PendingReview or ApplicationStatus.UnderReview;
+    var certificateExists = ViewBag.CertificateExists is bool exists && exists;
+    var allRequiredDocumentsApproved = Model.Documents
+        .Where(d => d.IsRequired)
+        .All(d => d.Status == DocumentStatus.Approved);
+    var hasUcan = !string.IsNullOrWhiteSpace(Model.VendorProfile.UcanNumber);
 }
 
-<div class="review-back-row"><a asp-action="Index" class="btn btn-link ps-0">← Back to applications</a><span class="small text-muted">Application reference: #@Model.ApplicationId</span></div>
+<div class="review-back-row">
+    <a asp-action="Index" class="btn btn-link ps-0">← Back to applications</a>
+    <span class="small text-muted">Application reference: #@Model.ApplicationId</span>
+</div>
+
 <section class="portal-page-heading" aria-labelledby="review-title">
     <div>
         <span class="section-eyebrow">Application Review</span>
@@ -21,42 +31,119 @@
     <div class="summary-item"><span class="summary-label">GST registration</span><span class="summary-value">@Model.VendorProfile.GstNumber</span></div>
 </div>
 
+@if (Model.Status == ApplicationStatus.Approved)
+{
+    <section class="portal-panel portal-section" aria-labelledby="certificate-issue-title">
+        <div class="panel-heading">
+            <div>
+                <h3 id="certificate-issue-title">Electronic Certificate</h3>
+                <p>Certificates are valid for two years from the issue date and allow five vendor downloads.</p>
+            </div>
+        </div>
+
+        @if (certificateExists)
+        {
+            <div class="alert alert-success mb-0" role="status">
+                A certificate has already been generated for this application. The vendor can download it from My Profile.
+            </div>
+        }
+        else if (!allRequiredDocumentsApproved)
+        {
+            <div class="alert alert-warning mb-0" role="status">
+                The application is approved, but one or more required documents are not marked as approved. A certificate cannot be issued yet.
+            </div>
+        }
+        else if (!hasUcan)
+        {
+            <div class="alert alert-warning mb-0" role="status">
+                This vendor does not have a UCAN. Assign the UCAN before issuing the certificate.
+            </div>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="fw-semibold">Certificate not generated</div>
+                    <div class="text-muted small">Issue a certificate for this previously approved application. This will not change its approval status.</div>
+                </div>
+                <form asp-action="IssueCertificate" method="post" class="m-0"
+                      onsubmit="return confirm('Generate and issue the certificate for this approved vendor?');">
+                    <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                    <button type="submit" class="btn btn-success">Issue Certificate</button>
+                </form>
+            </div>
+        }
+    </section>
+}
+
 <section class="portal-panel portal-section" aria-labelledby="review-documents-title">
-    <div class="panel-heading"><div><h3 id="review-documents-title">Document verification</h3><p>Open each submitted file and record the appropriate review outcome.</p></div></div>
+    <div class="panel-heading">
+        <div>
+            <h3 id="review-documents-title">Document verification</h3>
+            <p>Open each submitted file and record the appropriate review outcome.</p>
+        </div>
+    </div>
     <div class="table-responsive">
         <table class="table align-middle mb-0">
-            <thead><tr><th scope="col">Document</th><th scope="col">Required</th><th scope="col">Status</th><th scope="col">File</th><th scope="col" style="min-width:340px">Review action / history</th></tr></thead>
-            <tbody>
-            @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
-            {
-                var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
-                var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
+            <thead>
                 <tr>
-                    <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
-                    <td>@(d.IsRequired ? "Yes" : "No")</td>
-                    <td><span class="badge bg-@d.Status.Badge()">@d.Status</span></td>
-                    <td>@if (v != null) { <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">v@(v.VersionNumber): @v.OriginalFileName</a> } else { <span class="text-muted">Not uploaded</span> }</td>
-                    <td>
-                        @if (open && d.Status == DocumentStatus.Pending)
-                        {
-                            <form asp-action="ReviewDocument" method="post" class="review-action-form">
-                                <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
-                                <input type="hidden" name="vendorDocumentId" value="@d.VendorDocumentId" />
-                                <input name="remarks" class="form-control form-control-sm" placeholder="Remarks (required to reject)" maxlength="1000" aria-label="Remarks for @d.DocumentType.DisplayName()" />
-                                <div class="review-buttons"><button type="submit" name="decision" value="Approved" class="btn btn-sm btn-success">Approve</button><button type="submit" name="decision" value="Rejected" class="btn btn-sm btn-outline-danger">Reject</button></div>
-                            </form>
-                        }
-                        else if (rev != null)
-                        {
-                            <div class="review-history-line"><strong>@rev.Decision</strong><span>by @rev.Reviewer.Email</span>@if (!string.IsNullOrWhiteSpace(rev.Remarks)) { <p>@rev.Remarks</p> }</div>
-                        }
-                        else
-                        {
-                            <span class="text-muted small">No review recorded</span>
-                        }
-                    </td>
+                    <th scope="col">Document</th>
+                    <th scope="col">Required</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">File</th>
+                    <th scope="col" style="min-width:340px">Review action / history</th>
                 </tr>
-            }
+            </thead>
+            <tbody>
+                @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
+                {
+                    var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
+                    var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
+                    <tr>
+                        <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
+                        <td>@(d.IsRequired ? "Yes" : "No")</td>
+                        <td><span class="badge bg-@d.Status.Badge()">@d.Status</span></td>
+                        <td>
+                            @if (v != null)
+                            {
+                                <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">v@(v.VersionNumber): @v.OriginalFileName</a>
+                            }
+                            else
+                            {
+                                <span class="text-muted">Not uploaded</span>
+                            }
+                        </td>
+                        <td>
+                            @if (open && d.Status == DocumentStatus.Pending)
+                            {
+                                <form asp-action="ReviewDocument" method="post" class="review-action-form">
+                                    <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                                    <input type="hidden" name="vendorDocumentId" value="@d.VendorDocumentId" />
+                                    <input name="remarks" class="form-control form-control-sm" placeholder="Remarks (required to reject)" maxlength="1000" aria-label="Remarks for @d.DocumentType.DisplayName()" />
+                                    <div class="review-buttons">
+                                        <button type="submit" name="decision" value="Approved" class="btn btn-sm btn-success">Approve</button>
+                                        <button type="submit" name="decision" value="Rejected" class="btn btn-sm btn-outline-danger">Reject</button>
+                                    </div>
+                                </form>
+                            }
+                            else if (rev != null)
+                            {
+                                <div class="review-history-line">
+                                    <strong>@rev.Decision</strong>
+                                    <span>by @rev.Reviewer.Email</span>
+                                    @if (!string.IsNullOrWhiteSpace(rev.Remarks))
+                                    {
+                                        <p>@rev.Remarks</p>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <span class="text-muted small">No review recorded</span>
+                            }
+                        </td>
+                    </tr>
+                }
             </tbody>
         </table>
     </div>
@@ -65,7 +152,12 @@
 @if (open)
 {
     <section class="portal-panel portal-section final-decision-panel" aria-labelledby="final-decision-title">
-        <div class="panel-heading"><div><h3 id="final-decision-title">Final application decision</h3><p>Record the overall outcome after completing document verification.</p></div></div>
+        <div class="panel-heading">
+            <div>
+                <h3 id="final-decision-title">Final application decision</h3>
+                <p>Record the overall outcome after completing document verification.</p>
+            </div>
+        </div>
         <div class="decision-form-body">
             <form asp-action="FinalDecision" method="post">
                 <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
@@ -82,7 +174,12 @@
 }
 
 <section class="portal-panel" aria-labelledby="decision-history-title">
-    <div class="panel-heading"><div><h3 id="decision-history-title">Decision history</h3><p>Audit trail for recorded application decisions.</p></div></div>
+    <div class="panel-heading">
+        <div>
+            <h3 id="decision-history-title">Decision history</h3>
+            <p>Audit trail for recorded application decisions.</p>
+        </div>
+    </div>
     <ul class="list-group list-group-flush">
         @foreach (var h in Model.DecisionHistory.OrderByDescending(x => x.DecidedAt))
         {
@@ -90,7 +187,10 @@
                 <span class="decision-history-date">@h.DecidedAt.ToString("dd MMM yyyy HH:mm") UTC</span>
                 <span>@h.PreviousStatus <span aria-hidden="true">→</span> <strong>@h.NewStatus</strong></span>
                 <span class="decision-history-by">by @h.Admin.Email</span>
-                @if (!string.IsNullOrWhiteSpace(h.Remarks)) { <p>@h.Remarks</p> }
+                @if (!string.IsNullOrWhiteSpace(h.Remarks))
+                {
+                    <p>@h.Remarks</p>
+                }
             </li>
         }
         @if (!Model.DecisionHistory.Any())
