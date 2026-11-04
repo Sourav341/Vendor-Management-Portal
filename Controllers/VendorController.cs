@@ -87,7 +87,7 @@ public class VendorController : Controller
             .Select(c => new
             {
                 c.VendorCertificateId,
-                c.CertificateNumber,
+
                 c.VerificationToken,
                 c.IssuedAtUtc,
                 c.ValidUntilUtc,
@@ -98,7 +98,7 @@ public class VendorController : Controller
             .FirstOrDefaultAsync();
 
         ViewBag.CertificateId = latestCertificate?.VendorCertificateId;
-        ViewBag.CertificateNumber = latestCertificate?.CertificateNumber;
+        
         ViewBag.CertificateIssuedAtUtc = latestCertificate?.IssuedAtUtc;
         ViewBag.CertificateValidUntilUtc = latestCertificate?.ValidUntilUtc;
         ViewBag.CertificateDownloadCount = latestCertificate?.DownloadCount ?? 0;

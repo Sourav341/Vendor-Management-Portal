@@ -31,7 +31,7 @@
                         </p>
                         <h1 class="h3 fw-bold mb-2">Certificate Verification</h1>
                         <p class="text-muted mb-3">
-                            VB-GRAMG Vendor Management Portal
+                            VB-GRAMG Vendor Management Portal - Department of Rural Development
                         </p>
                         <span class="badge rounded-pill @statusClass px-3 py-2">
                             @Model.Status
@@ -43,10 +43,7 @@
 
                     <h2 class="h5 fw-semibold mb-3">Certificate Details</h2>
                     <div class="row g-3">
-                        <div class="col-12 col-md-6">
-                            <div class="small text-muted">Certificate Number</div>
-                            <div class="fw-semibold">@Model.CertificateNumber</div>
-                        </div>
+
                         <div class="col-12 col-md-6">
                             <div class="small text-muted">UCAN</div>
                             <div class="fw-semibold">@Model.UcanNumber</div>
@@ -77,10 +74,7 @@
                             <div class="small text-muted">District</div>
                             <div class="fw-semibold">@Model.District</div>
                         </div>
-                        <div class="col-12 col-md-6">
-                            <div class="small text-muted">Registration Type</div>
-                            <div class="fw-semibold">@(string.IsNullOrWhiteSpace(Model.RegistrationType) ? "—" : Model.RegistrationType)</div>
-                        </div>
+
                     </div>
 
                     <div class="alert alert-light border mt-4 mb-0" role="note">
@@ -93,7 +87,7 @@
             </div>
 
             <p class="text-center text-muted small mt-3 mb-0">
-                Verify that the certificate number and vendor details match the document presented.
+                Verify that the UCAN and vendor details match the document presented.
             </p>
         </div>
     </div>

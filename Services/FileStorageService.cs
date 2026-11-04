@@ -60,4 +60,11 @@ public class FileStorageService
         var path = Path.Combine(_root, Path.GetFileName(key));
         return File.Exists(path) ? File.OpenRead(path) : null;
     }
+
+    public string? GetFilePath(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        var path = Path.Combine(_root, Path.GetFileName(key));
+        return File.Exists(path) ? path : null;
+    }
 }

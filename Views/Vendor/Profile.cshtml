@@ -1,7 +1,10 @@
 @model VendorProfile
 
 @{
-    ViewData["Title"] = "Vendor Profile";
+    var profileDisplayName = string.IsNullOrWhiteSpace(Model.FullName)
+        ? "User Profile"
+        : Model.FullName.Trim();
+    ViewData["Title"] = profileDisplayName;
 
     var hasUcan = !string.IsNullOrWhiteSpace(Model.UcanNumber);
     var profilePhotoUrl = ViewBag.ProfilePhotoUrl as string;
@@ -54,7 +57,7 @@
         : Model.MobileNumber;
 
     int? certificateId = ViewBag.CertificateId as int?;
-    var certificateNumber = ViewBag.CertificateNumber as string;
+    
     DateTime? certificateIssuedAtUtc = ViewBag.CertificateIssuedAtUtc as DateTime?;
     DateTime? certificateValidUntilUtc = ViewBag.CertificateValidUntilUtc as DateTime?;
     var certificateDownloadCount = ViewBag.CertificateDownloadCount is int used ? used : 0;
@@ -62,7 +65,7 @@
     var certificateIsRevoked = ViewBag.CertificateIsRevoked is bool revoked && revoked;
     var certificateVerificationUrl = ViewBag.CertificateVerificationUrl as string;
 
-    var hasCertificate = certificateId.HasValue && !string.IsNullOrWhiteSpace(certificateNumber);
+    var hasCertificate = certificateId.HasValue;
     var certificateIsExpired = certificateValidUntilUtc.HasValue
         && certificateValidUntilUtc.Value <= DateTime.UtcNow;
     var downloadLimitReached = certificateDownloadCount >= certificateMaxDownloads;
@@ -108,8 +111,7 @@
 
         <div>
             <span class="section-eyebrow">Vendor Workspace</span>
-            <h2 id="vendor-profile-title" class="mb-1">Vendor Profile</h2>
-            <p class="mb-1">@Model.FullName</p>
+            <h2 id="vendor-profile-title" class="mb-1">@profileDisplayName</h2>
             <span class="text-muted small">UCAN: @(hasUcan ? Model.UcanNumber : "Not generated yet")</span>
         </div>
     </div>
@@ -281,12 +283,7 @@
         @if (hasCertificate)
         {
             <div class="row row-cols-1 row-cols-md-2 g-3 mb-3">
-                <div class="col">
-                    <div class="summary-item h-100">
-                        <span class="summary-label">Certificate Number</span>
-                        <span class="summary-value">@certificateNumber</span>
-                    </div>
-                </div>
+
                 <div class="col">
                     <div class="summary-item h-100">
                         <span class="summary-label">Issue Date</span>

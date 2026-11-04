@@ -43,8 +43,18 @@
 
         @if (certificateExists)
         {
-            <div class="alert alert-success mb-0" role="status">
-                A certificate has already been generated for this application. The vendor can download it from My Profile.
+            <div class="alert alert-success" role="status">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div>
+                        <div class="fw-semibold">Certificate already issued</div>
+                        <div class="small">Regenerate the PDF to apply the current layout, uploaded photo, and QR code.</div>
+                    </div>
+                    <form asp-action="RegenerateCertificatePdf" method="post" class="m-0"
+                          >
+                        <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                        <button type="submit" class="btn btn-outline-success">Regenerate PDF</button>
+                    </form>
+                </div>
             </div>
         }
         else if (!allRequiredDocumentsApproved)

@@ -44,7 +44,7 @@ public sealed class CertificatesController : Controller
             .Select(c => new
             {
                 c.VendorCertificateId,
-                c.CertificateNumber,
+
                 c.PdfStorageKey,
                 c.UcanNumber,
                 c.IssuedAtUtc,
@@ -169,12 +169,12 @@ public sealed class CertificatesController : Controller
             .Where(c => c.VerificationToken == token)
             .Select(c => new CertificateVerificationViewModel
             {
-                CertificateNumber = c.CertificateNumber,
+
                 VendorName = c.VendorName,
                 CompanyFirmName = c.CompanyFirmName,
                 District = c.District,
                 UcanNumber = c.UcanNumber,
-                RegistrationType = c.RegistrationType,
+
                 IssuedAtUtc = c.IssuedAtUtc,
                 ValidUntilUtc = c.ValidUntilUtc,
                 IsRevoked = c.IsRevoked

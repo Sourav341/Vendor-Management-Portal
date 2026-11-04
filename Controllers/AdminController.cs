@@ -202,8 +202,7 @@ public class AdminController : Controller
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            TempData["Success"] =
-                $"Certificate {certificate.CertificateNumber} issued successfully for UCAN {certificate.UcanNumber}.";
+                        TempData["Success"] = $"Certificate issued successfully for UCAN {certificate.UcanNumber}.";
 
             return RedirectToAction(nameof(Details), new { id = applicationId });
         }
@@ -216,6 +215,29 @@ public class AdminController : Controller
         }
     }
 
+    /// <summary>
+    /// Rebuilds an issued certificate PDF with the current template while preserving
+    /// its certificate number, verification token, validity dates, and download history.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RegenerateCertificatePdf(
+        int applicationId,
+        CancellationToken cancellationToken)
+    {
+        var certificate = await _db.VendorCertificates
+            .SingleOrDefaultAsync(c => c.ApplicationId == applicationId, cancellationToken);
+
+        if (certificate is null)
+        {
+            TempData["Error"] = "No certificate has been issued for this application.";
+            return RedirectToAction(nameof(Details), new { id = applicationId });
+        }
+
+        await _certificates.RegeneratePdfAsync(certificate, cancellationToken);
+        
+        return RedirectToAction(nameof(Details), new { id = applicationId });
+    }
     private static string CreateCertificateNumber(DateTime issuedAtUtc)
     {
         var uniquePart = Guid.NewGuid().ToString("N").ToUpperInvariant();
