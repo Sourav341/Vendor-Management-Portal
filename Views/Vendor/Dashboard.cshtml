@@ -108,16 +108,7 @@
     </div>
 }
 
-<!-- One form submits document files, Certificate Type, Remarks, and the application -->
-<form asp-controller="Vendor"
-      asp-action="Submit"
-      method="post"
-      enctype="multipart/form-data"
-      id="vendorApplicationForm">
-
-    @Html.AntiForgeryToken()
-
-    <!-- Required documents -->
+<!-- Required documents -->
     <section class="portal-panel portal-section"
              id="required-documents"
              aria-labelledby="documents-title">
@@ -125,8 +116,8 @@
             <div>
                 <h3 id="documents-title">Required documents</h3>
                 <p>
-                    Select or replace files below. Selected files, Certificate Type, and Remarks
-                    will be processed when you submit the application.
+                    Select or replace files below. Rejected or missing documents can also be uploaded
+                    during review; files selected during corrections are saved when you resubmit.
                 </p>
             </div>
 
@@ -158,9 +149,13 @@
                         var rev = v?.Reviews
                             .OrderByDescending(r => r.ReviewedAt)
                             .FirstOrDefault();
-                        var canUpload = canEdit &&
-                            (Model.Status == ApplicationStatus.Draft ||
-                             d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+                        var canUploadDuringReview =
+                            (Model.Status is ApplicationStatus.PendingReview or ApplicationStatus.UnderReview) &&
+                            (d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+                        var canUpload = canUploadDuringReview ||
+                            (canEdit &&
+                             (Model.Status == ApplicationStatus.Draft ||
+                              (d.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected)));
 
                         <tr>
                             <td class="fw-semibold">@d.DocumentType.DisplayName()</td>
@@ -190,16 +185,38 @@
                                 {
                                     <input type="hidden"
                                            name="Uploads[@i].DocumentType"
-                                           value="@d.DocumentType" />
+                                           value="@d.DocumentType"
+                                           form="vendorApplicationForm" />
                                 }
 
-                                @if (canUpload)
+                                @if (canUpload && canEdit)
                                 {
                                     <input type="file"
                                            name="Uploads[@i].File"
                                            class="form-control form-control-sm"
                                            accept=".pdf,.jpg,.jpeg,.png"
-                                           aria-label="Select @d.DocumentType.DisplayName() file" />
+                                           aria-label="Select @d.DocumentType.DisplayName() file"
+                                           form="vendorApplicationForm" />
+                                }
+                                else if (canUploadDuringReview)
+                                {
+                                    <form asp-controller="Vendor"
+                                          asp-action="Upload"
+                                          method="post"
+                                          enctype="multipart/form-data"
+                                          class="d-flex flex-column gap-2">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="type" value="@d.DocumentType" />
+                                        <input type="file"
+                                               name="file"
+                                               class="form-control form-control-sm"
+                                               accept=".pdf,.jpg,.jpeg,.png"
+                                               aria-label="Select replacement for @d.DocumentType.DisplayName()"
+                                               required />
+                                        <button type="submit" class="btn btn-sm btn-outline-success align-self-start">
+                                            Upload for review
+                                        </button>
+                                    </form>
                                 }
                                 else if (canEdit)
                                 {
@@ -218,6 +235,15 @@
             </table>
         </div>
     </section>
+
+    <!-- The main form submits selected documents, Certificate Type, Remarks, and the application. -->
+    <form asp-controller="Vendor"
+          asp-action="Submit"
+          method="post"
+          enctype="multipart/form-data"
+          id="vendorApplicationForm">
+
+        @Html.AntiForgeryToken()
 
     <!-- Certificate Type and Remarks -->
     <section class="portal-panel portal-section vendor-registration-details"

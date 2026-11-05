@@ -85,15 +85,19 @@ IF @LockResult < 0
             .Where(a => a.VendorProfile.UserId == userId)
             .OrderByDescending(a => a.ApplicationId).FirstAsync();
 
-        if (app.Status is not (ApplicationStatus.Draft or ApplicationStatus.CorrectionsRequired))
-            return "The application is locked while it is being reviewed.";
-
         var doc = await _db.VendorDocuments.Include(d => d.Versions)
             .FirstAsync(d => d.ApplicationId == app.ApplicationId && d.DocumentType == type);
 
-        if (app.Status == ApplicationStatus.CorrectionsRequired &&
-            doc.Status is DocumentStatus.Pending or DocumentStatus.Approved)
-            return "Only rejected or missing documents can be uploaded now.";
+        var canUploadAsDraft = app.Status == ApplicationStatus.Draft;
+        var canUploadDuringCorrections =
+            app.Status == ApplicationStatus.CorrectionsRequired &&
+            (doc.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+        var canUploadDuringReview =
+            (app.Status is ApplicationStatus.PendingReview or ApplicationStatus.UnderReview) &&
+            (doc.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected);
+
+        if (!canUploadAsDraft && !canUploadDuringCorrections && !canUploadDuringReview)
+            return "Only rejected or not-submitted documents can be uploaded while an application is under review.";
 
         var error = FileStorageService.Validate(file, type);
         if (error != null) return error;
