@@ -74,6 +74,14 @@
                             <div class="small text-muted">District</div>
                             <div class="fw-semibold">@Model.District</div>
                         </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Work Type</div>
+                            <div class="fw-semibold">@(string.IsNullOrWhiteSpace(Model.WorkType) ? "Not provided" : Model.WorkType)</div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="small text-muted">Sub Work Type</div>
+                            <div class="fw-semibold">@(string.IsNullOrWhiteSpace(Model.SubWorkType) ? "Not provided" : Model.SubWorkType)</div>
+                        </div>
 
                     </div>
 

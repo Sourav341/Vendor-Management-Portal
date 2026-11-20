@@ -30,6 +30,7 @@ public class FileStorageService
         if (file.Length > MaxBytes) return "File is larger than 3 MB.";
 
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+
         if (!Mime.ContainsKey(ext)) return "Only PDF, JPG and PNG files are allowed.";
         if (type == DocumentType.ProfilePhoto && ext == ".pdf") return "Profile photo must be a JPG or PNG image.";
 

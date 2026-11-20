@@ -1,0 +1,339 @@
+@model AdditionalDetailsPageViewModel
+@using VendorPortal.Models
+@{
+    ViewData["Title"] = "Additional Details";
+    var districts = ViewBag.Districts as List<string> ?? new();
+    var workTypes = ViewBag.WorkTypes as List<string> ?? new();
+    var canSubmit = ViewBag.CanSubmitAdditionalDetails is bool allowed && allowed;
+    var hasPendingRequest = ViewBag.HasPendingRequest is bool pending && pending;
+    var applicationStatus = ViewBag.ApplicationStatus?.ToString() ?? "Unknown";
+}
+
+<section class="portal-page-heading" aria-labelledby="additional-details-title">
+    <div>
+        <span class="section-eyebrow">Vendor Workspace</span>
+        <h2 id="additional-details-title">Additional Details</h2>
+        <p>Request work coverage for one or more districts. Admin approval updates your profile and certificate.</p>
+    </div>
+    <span class="badge bg-secondary">@applicationStatus</span>
+</section>
+
+@if (TempData["AdditionalDetailsSuccess"] is string success)
+{
+    <div class="alert alert-success" role="status">@success</div>
+}
+@if (TempData["AdditionalDetailsError"] is string error)
+{
+    <div class="alert alert-danger" role="alert">@error</div>
+}
+
+@if (hasPendingRequest)
+{
+    <div class="alert alert-info" role="status">
+        Your request is waiting for Admin review. You can submit another request after it is decided.
+    </div>
+}
+else if (!canSubmit)
+{
+    <div class="alert alert-secondary" role="status">
+        Additional details can be submitted while your application is a draft or awaiting corrections, and after your application is approved.
+    </div>
+}
+
+<section class="portal-panel portal-section" aria-labelledby="request-additional-details-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="request-additional-details-title">
+                @(Model.ReplacesRequestBatchId.HasValue ? "Correct and resubmit" : "Request work coverage")
+            </h3>
+            <p>Each row is reviewed by Admin before appearing on your profile or certificate. Remarks appear on your profile only; only Admin can remove approved coverage.</p>
+        </div>
+    </div>
+
+    @if (canSubmit)
+    {
+        <form asp-action="SubmitAdditionalDetails" method="post" class="p-3" id="additionalDetailsForm">
+            @Html.AntiForgeryToken()
+            @if (Model.ReplacesRequestBatchId is Guid batchId)
+            {
+                <input type="hidden" name="ReplacesRequestBatchId" value="@batchId" />
+            }
+
+            <div id="additionalDetailRows">
+                @for (var i = 0; i < Model.Entries.Count; i++)
+                {
+                    var entry = Model.Entries[i];
+                    <div class="additional-detail-row border rounded-3 p-3 mb-3">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-3">
+                                <label for="district-@i" class="form-label">District</label>
+                                <select id="district-@i" name="Entries[@i].District" class="form-select" required>
+                                    <option value="">-- Select District --</option>
+                                    @foreach (var district in districts)
+                                    {
+                                        <option value="@district" selected="@(entry.District == district)">@district</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="worktype-@i" class="form-label">Work Type</label>
+                                <select id="worktype-@i"
+                                        name="Entries[@i].WorkType"
+                                        class="form-select work-type-select"
+                                        data-subworktypes-url="@Url.Action("GetSubWorkTypes", "Vendor")"
+                                        required>
+                                    <option value="">-- Select Work Type --</option>
+                                    @foreach (var workType in workTypes)
+                                    {
+                                        <option value="@workType" selected="@(entry.WorkType == workType)">@workType</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="subworktype-@i" class="form-label">Sub Work Type</label>
+                                <select id="subworktype-@i"
+                                        name="Entries[@i].SubWorkType"
+                                        class="form-select sub-work-type-select"
+                                        data-selected-value="@entry.SubWorkType"
+                                        required>
+                                    <option value="">-- Select Sub Work Type --</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="remarks-@i" class="form-label">Remarks</label>
+                                <textarea id="remarks-@i"
+                                          name="Entries[@i].Remarks"
+                                          class="form-control"
+                                          rows="2"
+                                          maxlength="4000"
+                                          placeholder="Optional (maximum 100 words)">@entry.Remarks</textarea>
+                                <small class="text-muted">Maximum 100 words</small>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <template id="additionalDetailRowTemplate">
+                <div class="additional-detail-row border rounded-3 p-3 mb-3">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label">District</label>
+                            <select data-name="Entries[__index__].District" class="form-select" required>
+                                <option value="">-- Select District --</option>
+                                @foreach (var district in districts)
+                                {
+                                    <option value="@district">@district</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Work Type</label>
+                            <select data-name="Entries[__index__].WorkType"
+                                    class="form-select work-type-select"
+                                    data-subworktypes-url="@Url.Action("GetSubWorkTypes", "Vendor")"
+                                    required>
+                                <option value="">-- Select Work Type --</option>
+                                @foreach (var workType in workTypes)
+                                {
+                                    <option value="@workType">@workType</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Sub Work Type</label>
+                            <select data-name="Entries[__index__].SubWorkType"
+                                    class="form-select sub-work-type-select"
+                                    required>
+                                <option value="">-- Select Sub Work Type --</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Remarks</label>
+                            <textarea data-name="Entries[__index__].Remarks"
+                                      class="form-control"
+                                      rows="2"
+                                      maxlength="4000"
+                                      placeholder="Optional (maximum 100 words)"></textarea>
+                            <small class="text-muted">Maximum 100 words</small>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                <button type="button" class="btn btn-outline-primary" id="addDetailRow">Add another district / work type</button>
+                <button type="submit" class="btn btn-success">
+                    @(Model.ReplacesRequestBatchId.HasValue ? "Resubmit for Admin approval" : "Submit for Admin approval")
+                </button>
+            </div>
+            <p class="small text-muted mt-3 mb-0">Approved details are added to the certificate. The certificate shows District, Work Type, and Sub Work Type only.</p>
+        </form>
+    }
+</section>
+
+<section class="portal-panel portal-section" aria-labelledby="additional-details-history-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="additional-details-history-title">Request history</h3>
+            <p>Track each submitted row and its Admin review result.</p>
+        </div>
+    </div>
+    @if (Model.Requests.Count == 0)
+    {
+        <div class="p-3 text-muted">No Additional Details requests have been submitted.</div>
+    }
+    else
+    {
+        @foreach (var batch in Model.Requests.GroupBy(x => x.RequestBatchId).OrderByDescending(g => g.Max(x => x.SubmittedAtUtc)))
+        {
+            var first = batch.First();
+            var batchStatuses = batch.Select(x => x.Status).Distinct().ToList();
+            var batchBadge = batchStatuses.Count == 1 ? batchStatuses[0].Badge() : "secondary";
+            var batchStatus = batchStatuses.Count == 1 ? batchStatuses[0].ToString() : "Mixed status";
+            <div class="p-3 border-bottom">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <div class="fw-semibold">Submitted @first.SubmittedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                    <span class="badge bg-@batchBadge">@batchStatus</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-2">
+                        <thead><tr><th>District</th><th>Work Type</th><th>Sub Work Type</th><th>Remarks</th><th>Status</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in batch)
+                        {
+                            <tr>
+                                <td>@row.District</td>
+                                <td>@row.WorkType</td>
+                                <td>@row.SubWorkType</td>
+                                <td>@(string.IsNullOrWhiteSpace(row.Remarks) ? "—" : row.Remarks)</td>
+                                <td>
+                                    <span class="badge bg-@row.Status.Badge()">@row.Status</span>
+                                    @if (!string.IsNullOrWhiteSpace(row.ReviewRemarks))
+                                    {
+                                        <div class="small text-muted mt-1">@row.ReviewRemarks</div>
+                                    }
+                                    @if (row.ReviewedAtUtc.HasValue)
+                                    {
+                                        <div class="small text-muted mt-1">Reviewed by @(row.ReviewedByAdmin?.Email ?? "Admin") on @row.ReviewedAtUtc.Value.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(first.ReviewRemarks))
+                {
+                    <div class="small"><strong>Admin remarks:</strong> @first.ReviewRemarks</div>
+                }
+                @if (first.ReviewedAtUtc.HasValue)
+                {
+                    <div class="small text-muted">
+                        Reviewed by @(first.ReviewedByAdmin?.Email ?? "Admin") on @first.ReviewedAtUtc.Value.ToLocalTime().ToString("dd MMM yyyy HH:mm")
+                    </div>
+                }
+            </div>
+        }
+    }
+</section>
+
+<script>
+    (function () {
+        const rows = document.getElementById("additionalDetailRows");
+        const template = document.getElementById("additionalDetailRowTemplate");
+        const addButton = document.getElementById("addDetailRow");
+        const form = document.getElementById("additionalDetailsForm");
+        if (!rows || !template || !addButton || !form) return;
+
+        let nextIndex = @Model.Entries.Count;
+
+        function loadSubWorkTypes(workSelect, selectedValue) {
+            const row = workSelect.closest(".additional-detail-row");
+            const subSelect = row?.querySelector(".sub-work-type-select");
+            if (!subSelect) return;
+
+            const workType = workSelect.value;
+            const url = workSelect.dataset.subworktypesUrl;
+            subSelect.replaceChildren(new Option("-- Select Sub Work Type --", ""));
+            subSelect.disabled = !workType;
+            if (!workType || !url) return;
+
+            fetch(url + "?workType=" + encodeURIComponent(workType), {
+                headers: { "Accept": "application/json" }
+            })
+                .then(response => {
+                    if (!response.ok) throw new Error("Could not load options.");
+                    return response.json();
+                })
+                .then(values => {
+                    for (const value of values) {
+                        const option = new Option(value, value);
+                        option.selected = value === selectedValue;
+                        subSelect.add(option);
+                    }
+                    subSelect.disabled = false;
+                })
+                .catch(() => {
+                    subSelect.add(new Option("Unable to load options", ""));
+                    subSelect.disabled = true;
+                });
+        }
+
+        function wireRow(row) {
+            const workSelect = row.querySelector(".work-type-select");
+            const subSelect = row.querySelector(".sub-work-type-select");
+            if (workSelect) {
+                workSelect.addEventListener("change", () => loadSubWorkTypes(workSelect, ""));
+                if (workSelect.value) {
+                    loadSubWorkTypes(workSelect, subSelect?.dataset.selectedValue || "");
+                }
+            }
+        }
+
+        rows.querySelectorAll(".additional-detail-row").forEach(wireRow);
+
+        addButton.addEventListener("click", () => {
+            const fragment = template.content.cloneNode(true);
+            const row = fragment.querySelector(".additional-detail-row");
+            row.querySelectorAll("[data-name]").forEach(element => {
+                element.name = element.dataset.name.replaceAll("__index__", String(nextIndex));
+                element.id = "detail-" + nextIndex + "-" + element.name.split(".").pop();
+            });
+            nextIndex += 1;
+            rows.appendChild(fragment);
+            wireRow(rows.lastElementChild);
+        });
+
+        form.addEventListener("submit", event => {
+            rows.querySelectorAll(".additional-detail-row").forEach((row, index) => {
+                row.querySelectorAll("select, textarea").forEach(element => {
+                    const propertyName = element.name.substring(element.name.indexOf("].") + 2);
+                    element.name = "Entries[" + index + "]." + propertyName;
+                });
+            });
+
+            const seen = new Set();
+            for (const row of rows.querySelectorAll(".additional-detail-row")) {
+                const remarks = row.querySelector("textarea")?.value || "";
+                const words = remarks.trim().match(/\S+/g)?.length || 0;
+                if (words > 100) {
+                    event.preventDefault();
+                    alert("Remarks cannot exceed 100 words per row.");
+                    return;
+                }
+
+                const district = row.querySelector("select[name$='.District']")?.value || "";
+                const workType = row.querySelector("select[name$='.WorkType']")?.value || "";
+                const subWorkType = row.querySelector("select[name$='.SubWorkType']")?.value || "";
+                const key = [district, workType, subWorkType].join("|").toLowerCase();
+                if (seen.has(key)) {
+                    event.preventDefault();
+                    alert("The same district and work type cannot appear more than once in a request.");
+                    return;
+                }
+                seen.add(key);
+            }
+        });
+    })();
+</script>

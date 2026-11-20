@@ -8,6 +8,7 @@
 
     var hasUcan = !string.IsNullOrWhiteSpace(Model.UcanNumber);
     var profilePhotoUrl = ViewBag.ProfilePhotoUrl as string;
+    var approvedAdditionalDetails = ViewBag.ApprovedAdditionalDetails as List<VendorAdditionalDetailRequest> ?? new();
     var applicationStatus = ViewBag.ApplicationStatus?.ToString() ?? "Unknown";
     var latestRemarks = ViewBag.LatestDecisionRemarks as string;
     DateTime? submittedAt = ViewBag.ApplicationSubmittedAt as DateTime?;
@@ -61,7 +62,7 @@
     DateTime? certificateIssuedAtUtc = ViewBag.CertificateIssuedAtUtc as DateTime?;
     DateTime? certificateValidUntilUtc = ViewBag.CertificateValidUntilUtc as DateTime?;
     var certificateDownloadCount = ViewBag.CertificateDownloadCount is int used ? used : 0;
-    var certificateMaxDownloads = ViewBag.CertificateMaxDownloads is int maximum ? maximum : 5;
+    var certificateMaxDownloads = ViewBag.CertificateMaxDownloads is int maximum ? maximum : 15;
     var certificateIsRevoked = ViewBag.CertificateIsRevoked is bool revoked && revoked;
     var certificateVerificationUrl = ViewBag.CertificateVerificationUrl as string;
 
@@ -231,13 +232,6 @@
 
             <div class="col">
                 <div class="summary-item h-100">
-                    <span class="summary-label">Registration Type</span>
-                    <span class="summary-value">@(string.IsNullOrWhiteSpace(Model.Cert_Type) ? "Not provided" : Model.Cert_Type)</span>
-                </div>
-            </div>
-
-            <div class="col">
-                <div class="summary-item h-100">
                     <span class="summary-label">Registered Email</span>
                     <span class="summary-value">@registeredEmail</span>
                 </div>
@@ -265,6 +259,38 @@
             </div>
         </div>
     </div>
+</section>
+
+<section class="portal-panel portal-section" aria-labelledby="approved-details-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="approved-details-title">Approved Additional Details</h3>
+            <p>Approved districts and work types appear here. Remarks are visible in your profile and are not printed on the certificate.</p>
+        </div>
+    </div>
+    @if (approvedAdditionalDetails.Count == 0)
+    {
+        <div class="p-3 text-muted">No additional work coverage has been approved yet.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead><tr><th>District</th><th>Work Type</th><th>Sub Work Type</th><th>Remarks</th></tr></thead>
+                <tbody>
+                @foreach (var detail in approvedAdditionalDetails)
+                {
+                    <tr>
+                        <td>@detail.District</td>
+                        <td>@detail.WorkType</td>
+                        <td>@detail.SubWorkType</td>
+                        <td>@(string.IsNullOrWhiteSpace(detail.Remarks) ? "—" : detail.Remarks)</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
 </section>
 
 <section class="portal-panel portal-section" aria-labelledby="certificate-title">

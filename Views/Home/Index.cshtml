@@ -9,8 +9,8 @@
         <div class="hero-actions">
             @if (User.Identity?.IsAuthenticated != true)
             {
-                <a class="btn-portal-primary" asp-controller="Account" asp-action="Login">Vendor Login <span aria-hidden="true">→</span></a>
-                <a class="btn-portal-secondary" asp-controller="Account" asp-action="Register">Register as a Vendor</a>
+                <a class="btn-portal-primary" asp-controller="Account" asp-action="Login">Login <span aria-hidden="true">→</span></a>
+                <a class="btn-portal-secondary" asp-controller="Account" asp-action="Register">Register </a>
             }
             else if (User.IsInRole("Admin"))
             {

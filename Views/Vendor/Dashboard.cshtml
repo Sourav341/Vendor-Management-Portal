@@ -11,8 +11,9 @@
         .FirstOrDefault();
 
     var orderedDocuments = Model.Documents
-        .OrderBy(x => x.DocumentType)
+        .OrderBy(x => x.DocumentType.DisplayOrder())
         .ToList();
+    var revalidationCycle = ViewBag.CertificateRevalidationCycle as CertificateRevalidationCycle;
 }
 
 <!-- Application heading -->
@@ -108,6 +109,89 @@
     </div>
 }
 
+@if (revalidationCycle is { Status: CertificateRevalidationStatus.Open })
+{
+    <section class="portal-panel portal-section" aria-labelledby="certificate-revalidation-title">
+        <div class="panel-heading">
+            <div>
+                <h3 id="certificate-revalidation-title">Additional documents requested</h3>
+                <p>Your current certificate remains active while these files are reviewed. Upload each requested document so the admin can review it.</p>
+            </div>
+            <span class="badge text-bg-warning">Review in progress</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Document</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Submitted file</th>
+                        <th scope="col">Upload / replace</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var request in revalidationCycle.Documents.OrderBy(d => d.VendorDocument.DocumentType.DisplayOrder()))
+                    {
+                        var type = request.VendorDocument.DocumentType;
+                        var acceptedFileTypes = type == DocumentType.ProfilePhoto
+                            ? ".jpg,.jpeg,.png"
+                            : ".pdf,.jpg,.jpeg,.png";
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">@type.DisplayName()</div>
+                                <div class="small text-muted">Requested by @request.RequestedByAdmin.Email on @request.RequestedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                @if (!string.IsNullOrWhiteSpace(request.ReviewRemarks))
+                                {
+                                    <div class="small text-danger mt-1">Admin remarks: @request.ReviewRemarks</div>
+                                }
+                            </td>
+                            <td><span class="badge bg-@request.Status.Badge()">@request.Status</span></td>
+                            <td>
+                                @if (request.SubmittedVersion is { } version)
+                                {
+                                    <a asp-controller="Documents" asp-action="Get" asp-route-id="@version.DocumentVersionId" target="_blank" rel="noopener">View v@(version.VersionNumber): @version.OriginalFileName</a>
+                                    <div class="small text-muted">Uploaded by @(version.UploadedBy?.Email ?? "You") on @version.UploadedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">Not uploaded</span>
+                                }
+                            </td>
+                            <td>
+                                @if (request.Status is DocumentStatus.NotSubmitted or DocumentStatus.Rejected)
+                                {
+                                    <form asp-action="UploadRevalidationDocument" method="post" enctype="multipart/form-data" class="d-flex flex-column gap-2">
+                                        <input type="hidden" name="revalidationDocumentId" value="@request.CertificateRevalidationDocumentId" />
+                                        <input type="file" name="file" class="form-control form-control-sm" accept="@acceptedFileTypes" required />
+                                        <button type="submit" class="btn btn-sm btn-success align-self-start">
+                                            @(request.Status == DocumentStatus.Rejected ? "Replace file" : "Upload file")
+                                        </button>
+                                        <small class="text-muted">PDF, JPG or PNG · Maximum 3 MB</small>
+                                    </form>
+                                }
+                                else if (request.Status == DocumentStatus.Pending)
+                                {
+                                    <span class="text-muted small">Waiting for admin review</span>
+                                }
+                                else
+                                {
+                                    <span class="text-success small">Approved for this review</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+else if (revalidationCycle is { Status: CertificateRevalidationStatus.Approved })
+{
+    <div class="alert alert-success" role="status">
+        The latest requested documents were approved on @revalidationCycle.ApprovedAtUtc?.ToLocalTime().ToString("dd MMM yyyy HH:mm").
+    </div>
+}
+
 <!-- Required documents -->
     <section class="portal-panel portal-section"
              id="required-documents"
@@ -143,6 +227,7 @@
                     @for (var i = 0; i < orderedDocuments.Count; i++)
                     {
                         var d = orderedDocuments[i];
+                        var acceptedFileTypes = ".pdf,.jpg,.jpeg,.png";
                         var v = d.Versions
                             .OrderByDescending(x => x.VersionNumber)
                             .FirstOrDefault();
@@ -174,6 +259,10 @@
                                        asp-route-id="@v.DocumentVersionId"
                                        target="_blank"
                                        rel="noopener">View v@(v.VersionNumber)</a>
+                                    <div class="small text-muted">
+                                        Uploaded by @(v.UploadedBy?.Email ?? "Uploader not recorded")
+                                        on @v.UploadedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")
+                                    </div>
                                 }
                                 else
                                 {
@@ -194,7 +283,7 @@
                                     <input type="file"
                                            name="Uploads[@i].File"
                                            class="form-control form-control-sm"
-                                           accept=".pdf,.jpg,.jpeg,.png"
+                                           accept="@acceptedFileTypes"
                                            aria-label="Select @d.DocumentType.DisplayName() file"
                                            form="vendorApplicationForm" />
                                 }
@@ -210,7 +299,7 @@
                                         <input type="file"
                                                name="file"
                                                class="form-control form-control-sm"
-                                               accept=".pdf,.jpg,.jpeg,.png"
+                                               accept="@acceptedFileTypes"
                                                aria-label="Select replacement for @d.DocumentType.DisplayName()"
                                                required />
                                         <button type="submit" class="btn btn-sm btn-outline-success align-self-start">
@@ -236,7 +325,7 @@
         </div>
     </section>
 
-    <!-- The main form submits selected documents, Certificate Type, Remarks, and the application. -->
+    <!-- The main form submits required documents and the application. -->
     <form asp-controller="Vendor"
           asp-action="Submit"
           method="post"
@@ -244,88 +333,6 @@
           id="vendorApplicationForm">
 
         @Html.AntiForgeryToken()
-
-    <!-- Certificate Type and Remarks -->
-    <section class="portal-panel portal-section vendor-registration-details"
-             id="vendor-registration-details"
-             aria-labelledby="vendor-details-title">
-        <div class="panel-heading">
-            <div>
-                <h3 id="vendor-details-title">Additional details</h3>
-                <p>Select your certificate type and enter remarks, if applicable.</p>
-            </div>
-        </div>
-
-        <div class="p-3">
-            @if (canEdit)
-            {
-                <div class="row g-3">
-                    <div class="col-md-4">
-                        <label for="Cert_Type" class="form-label">Certificate Type</label>
-                        <select id="Cert_Type"
-                                name="Cert_Type"
-                                class="form-select"
-                                required>
-                            <option value="">-- Select Certificate Type --</option>
-                            @if (Model.VendorProfile.Cert_Type == "Admin")
-                            {
-                                <option value="Admin" selected>Admin</option>
-                            }
-                            else
-                            {
-                                <option value="Admin">Admin</option>
-                            }
-                            @if (Model.VendorProfile.Cert_Type == "Material")
-                            {
-                                <option value="Material" selected>Material</option>
-                            }
-                            else
-                            {
-                                <option value="Material">Material</option>
-                            }
-                        </select>
-                    </div>
-
-                    <div class="col-md-8">
-                        <label for="Remarks" class="form-label">Remarks</label>
-                        <textarea id="Remarks"
-                                  name="Remarks"
-                                  class="form-control"
-                                  rows="3"
-                                  maxlength="5000"
-                                  placeholder="Enter remarks (maximum 100 words)"
-                                  aria-describedby="remarksWordCount remarksError">@(Model.VendorProfile.Remarks ?? "")</textarea>
-
-                        <div class="d-flex justify-content-between flex-wrap gap-1 mt-1">
-                            <small class="text-muted" id="remarksWordCount" aria-live="polite">0 / 100 words</small>
-                            <small class="text-danger" id="remarksError" role="alert"></small>
-                        </div>
-                    </div>
-                </div>
-            }
-            else
-            {
-                <div class="row g-3">
-                    <div class="col-md-4">
-                        <span class="summary-label">Certificate Type</span>
-                        <span class="summary-value">
-                            @(string.IsNullOrWhiteSpace(Model.VendorProfile.Cert_Type)
-                                ? "Not provided"
-                                : Model.VendorProfile.Cert_Type)
-                        </span>
-                    </div>
-                    <div class="col-md-8">
-                        <span class="summary-label">Remarks</span>
-                        <div class="summary-value" style="white-space:pre-wrap;overflow-wrap:anywhere">
-                            @(string.IsNullOrWhiteSpace(Model.VendorProfile.Remarks)
-                                ? "No remarks provided"
-                                : Model.VendorProfile.Remarks)
-                        </div>
-                    </div>
-                </div>
-            }
-        </div>
-    </section>
 
     <!-- The single submit button -->
     @if (canEdit)
@@ -349,60 +356,3 @@
         </section>
     }
 </form>
-
-<!-- Remarks word counter: client-side convenience; server must also validate 100 words -->
-<script>
-    (function () {
-        const form = document.getElementById("vendorApplicationForm");
-        const remarks = document.getElementById("Remarks");
-        const counter = document.getElementById("remarksWordCount");
-        const error = document.getElementById("remarksError");
-        const submitButton = document.getElementById("submitApplicationButton");
-        const maxWords = 100;
-
-        if (!form) return;
-
-        function countWords(value) {
-            const matches = value.match(
-                /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu
-            );
-
-            return matches ? matches.length : 0;
-        }
-
-        function updateWordCount() {
-            if (!remarks || !counter || !error) return 0;
-
-            const count = countWords(remarks.value);
-            counter.textContent = `${count} / ${maxWords} words`;
-
-            if (count > maxWords) {
-                error.textContent = "Remarks cannot exceed 100 words.";
-                counter.classList.add("text-danger");
-            } else {
-                error.textContent = "";
-                counter.classList.remove("text-danger");
-            }
-
-            return count;
-        }
-
-        if (remarks) {
-            remarks.addEventListener("input", updateWordCount);
-            updateWordCount();
-        }
-
-        form.addEventListener("submit", function (event) {
-            if (remarks && updateWordCount() > maxWords) {
-                event.preventDefault();
-                remarks.focus();
-                return;
-            }
-
-            if (submitButton) {
-                submitButton.disabled = true;
-                submitButton.textContent = "Processing application...";
-            }
-        });
-    })();
-</script>

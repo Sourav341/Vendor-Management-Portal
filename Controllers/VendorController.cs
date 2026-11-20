@@ -27,6 +27,21 @@ public class VendorController : Controller
     private string UserId =>
         User.FindFirstValue(ClaimTypes.NameIdentifier)!;
 
+    private Task<MasterWorkType?> FindMasterWorkTypeAsync(string? workType, string? subWorkType)
+    {
+        if (string.IsNullOrWhiteSpace(workType) || string.IsNullOrWhiteSpace(subWorkType))
+            return Task.FromResult<MasterWorkType?>(null);
+
+        var normalizedWorkType = workType.Trim();
+        var normalizedSubWorkType = subWorkType.Trim();
+
+        return _db.MasterWorkTypes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x =>
+                x.WorkType == normalizedWorkType &&
+                x.SubWorkType == normalizedSubWorkType);
+    }
+
     // ---------------- Vendor Dashboard ----------------
 
     [HttpGet]
@@ -34,7 +49,280 @@ public class VendorController : Controller
     {
         var application = await _apps.GetForVendorAsync(UserId);
 
+        ViewBag.CertificateRevalidationCycle = await _db.CertificateRevalidationCycles
+            .AsNoTracking()
+            .Where(c => c.ApplicationId == application.ApplicationId)
+            .OrderByDescending(c => c.RequestedAtUtc)
+            .ThenByDescending(c => c.CertificateRevalidationCycleId)
+            .Include(c => c.RequestedByAdmin)
+            .Include(c => c.ApprovedByAdmin)
+            .Include(c => c.Documents).ThenInclude(d => d.VendorDocument)
+            .Include(c => c.Documents).ThenInclude(d => d.SubmittedVersion).ThenInclude(v => v!.UploadedBy)
+            .Include(c => c.Documents).ThenInclude(d => d.RequestedByAdmin)
+            .Include(c => c.Documents).ThenInclude(d => d.ReviewedByAdmin)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync();
+
         return View(application);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetSubWorkTypes(string? workType)
+    {
+        if (string.IsNullOrWhiteSpace(workType))
+            return Json(Array.Empty<string>());
+
+        var subWorkTypes = await _db.MasterWorkTypes
+            .AsNoTracking()
+            .Where(x => x.WorkType == workType.Trim())
+            .Select(x => x.SubWorkType)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        return Json(subWorkTypes);
+    }
+
+    // ---------------- Additional Details ----------------
+
+    [HttpGet]
+    public async Task<IActionResult> AdditionalDetails()
+    {
+        var application = await _apps.GetForVendorAsync(UserId);
+        var profileId = application.VendorProfile.VendorProfileId;
+
+        var requests = await _db.VendorAdditionalDetailRequests
+            .AsNoTracking()
+            .Include(x => x.ReviewedByAdmin)
+            .Where(x => x.VendorProfileId == profileId)
+            .OrderByDescending(x => x.SubmittedAtUtc)
+            .ThenByDescending(x => x.VendorAdditionalDetailRequestId)
+            .ToListAsync();
+
+        var correctionBatch = requests
+            .Where(x => x.Status is AdditionalDetailStatus.CorrectionsRequired or AdditionalDetailStatus.Rejected)
+            .GroupBy(x => x.RequestBatchId)
+            .OrderByDescending(group => group.Max(row => row.SubmittedAtUtc))
+            .FirstOrDefault();
+
+        ViewBag.Districts = await _db.MasterDistricts
+            .AsNoTracking()
+            .Select(x => x.DistrictName)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        ViewBag.WorkTypes = await _db.MasterWorkTypes
+            .AsNoTracking()
+            .Select(x => x.WorkType)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        ViewBag.ApplicationStatus = application.Status;
+        ViewBag.HasPendingRequest = requests.Any(x => x.Status == AdditionalDetailStatus.PendingReview);
+        ViewBag.CanSubmitAdditionalDetails =
+            (application.Status is ApplicationStatus.Draft or
+                ApplicationStatus.CorrectionsRequired or
+                ApplicationStatus.PendingReview or
+                ApplicationStatus.UnderReview or
+                ApplicationStatus.Approved) &&
+            !ViewBag.HasPendingRequest;
+
+        return View(new AdditionalDetailsPageViewModel
+        {
+            Entries = correctionBatch is null
+                ? new() { new() }
+                : correctionBatch.Select(x => new AdditionalDetailEntryInput
+                {
+                    District = x.District,
+                    WorkType = x.WorkType,
+                    SubWorkType = x.SubWorkType,
+                    Remarks = x.Remarks
+                }).ToList(),
+            ReplacesRequestBatchId = correctionBatch?.Key,
+            Requests = requests
+        });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SubmitAdditionalDetails(AdditionalDetailsPageViewModel model)
+    {
+        var application = await _apps.GetForVendorAsync(UserId);
+        var profileId = application.VendorProfile.VendorProfileId;
+
+        if (application.Status is not (
+                ApplicationStatus.Draft or
+                ApplicationStatus.CorrectionsRequired or
+                ApplicationStatus.PendingReview or
+                ApplicationStatus.UnderReview or
+                ApplicationStatus.Approved))
+        {
+            TempData["AdditionalDetailsError"] =
+                "Additional details can be submitted only before final approval or after the vendor is approved.";
+            return RedirectToAction(nameof(AdditionalDetails));
+        }
+
+        if (await _db.VendorAdditionalDetailRequests.AnyAsync(x =>
+                x.VendorProfileId == profileId &&
+                x.Status == AdditionalDetailStatus.PendingReview))
+        {
+            TempData["AdditionalDetailsError"] =
+                "An additional details request is already waiting for Admin review.";
+            return RedirectToAction(nameof(AdditionalDetails));
+        }
+
+        List<VendorAdditionalDetailRequest> correctionRows = new();
+        if (model.ReplacesRequestBatchId is Guid replacesBatchId)
+        {
+            correctionRows = await _db.VendorAdditionalDetailRequests
+                .Where(x => x.VendorProfileId == profileId &&
+                            x.RequestBatchId == replacesBatchId &&
+                            (x.Status == AdditionalDetailStatus.CorrectionsRequired ||
+                             x.Status == AdditionalDetailStatus.Rejected))
+                .ToListAsync();
+
+            if (correctionRows.Count == 0)
+            {
+                TempData["AdditionalDetailsError"] =
+                    "The correction request could not be found. Refresh the page and try again.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+        }
+        else if (await _db.VendorAdditionalDetailRequests.AnyAsync(x =>
+                     x.VendorProfileId == profileId &&
+                     (x.Status == AdditionalDetailStatus.CorrectionsRequired ||
+                      x.Status == AdditionalDetailStatus.Rejected)))
+        {
+            TempData["AdditionalDetailsError"] =
+                "Please edit and resubmit the Additional Details rejected or returned by Admin.";
+            return RedirectToAction(nameof(AdditionalDetails));
+        }
+
+        var entries = (model.Entries ?? new())
+            .Where(x =>
+                !string.IsNullOrWhiteSpace(x.District) ||
+                !string.IsNullOrWhiteSpace(x.WorkType) ||
+                !string.IsNullOrWhiteSpace(x.SubWorkType) ||
+                !string.IsNullOrWhiteSpace(x.Remarks))
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            TempData["AdditionalDetailsError"] = "Add at least one district and work type.";
+            return RedirectToAction(nameof(AdditionalDetails));
+        }
+
+        if (entries.Any(x =>
+                string.IsNullOrWhiteSpace(x.District) ||
+                string.IsNullOrWhiteSpace(x.WorkType) ||
+                string.IsNullOrWhiteSpace(x.SubWorkType) ||
+                x.District.Trim().Length > 100 ||
+                x.WorkType.Trim().Length > 100 ||
+                x.SubWorkType.Trim().Length > 150 ||
+                (x.Remarks?.Length ?? 0) > 4000))
+        {
+            TempData["AdditionalDetailsError"] = "Complete each row and keep the values within the allowed lengths.";
+            return RedirectToAction(nameof(AdditionalDetails));
+        }
+
+        var districtNames = await _db.MasterDistricts
+            .AsNoTracking()
+            .Select(x => x.DistrictName)
+            .Distinct()
+            .ToListAsync();
+        var validDistricts = districtNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seenRows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var newRows = new List<VendorAdditionalDetailRequest>();
+
+        foreach (var entry in entries)
+        {
+            var district = entry.District.Trim();
+            var workType = entry.WorkType.Trim();
+            var subWorkType = entry.SubWorkType.Trim();
+            var remarks = entry.Remarks?.Trim();
+
+            if (!validDistricts.Contains(district))
+            {
+                TempData["AdditionalDetailsError"] = $"'{district}' is not a valid district.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+
+            var workTypeRow = await FindMasterWorkTypeAsync(workType, subWorkType);
+            if (workTypeRow is null)
+            {
+                TempData["AdditionalDetailsError"] =
+                    "Select a valid work type and sub work type from the available options.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+
+            var wordCount = string.IsNullOrWhiteSpace(remarks)
+                ? 0
+                : Regex.Matches(remarks, @"\S+").Count;
+            if (wordCount > 100)
+            {
+                TempData["AdditionalDetailsError"] = "Remarks cannot exceed 100 words per row.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+
+            var rowKey = $"{district}\u001f{workTypeRow.WorkType}\u001f{workTypeRow.SubWorkType}";
+            if (!seenRows.Add(rowKey))
+            {
+                TempData["AdditionalDetailsError"] =
+                    "The same district and work type cannot appear more than once in a request.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+
+            newRows.Add(new VendorAdditionalDetailRequest
+            {
+                District = district,
+                WorkType = workTypeRow.WorkType,
+                SubWorkType = workTypeRow.SubWorkType,
+                Remarks = string.IsNullOrWhiteSpace(remarks) ? null : remarks,
+                VendorProfileId = profileId,
+                ApplicationId = application.ApplicationId,
+                RequestedByVendorId = UserId,
+                SubmittedAtUtc = DateTime.UtcNow,
+                Status = AdditionalDetailStatus.PendingReview
+            });
+        }
+
+        if (application.Status == ApplicationStatus.Approved)
+        {
+            var approvedRows = await _db.VendorAdditionalDetailRequests
+                .AsNoTracking()
+                .Where(x => x.VendorProfileId == profileId &&
+                            x.Status == AdditionalDetailStatus.Approved)
+                .Select(x => new { x.District, x.WorkType, x.SubWorkType })
+                .ToListAsync();
+
+            var existingRows = approvedRows
+                .Select(x => $"{x.District}\u001f{x.WorkType}\u001f{x.SubWorkType}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (newRows.Any(x => existingRows.Contains(
+                    $"{x.District}\u001f{x.WorkType}\u001f{x.SubWorkType}")))
+            {
+                TempData["AdditionalDetailsError"] =
+                    "One or more selected district and work type combinations are already approved.";
+                return RedirectToAction(nameof(AdditionalDetails));
+            }
+        }
+
+        var batchId = Guid.NewGuid();
+        foreach (var row in newRows)
+            row.RequestBatchId = batchId;
+
+        foreach (var oldRow in correctionRows)
+            oldRow.Status = AdditionalDetailStatus.Superseded;
+
+        _db.VendorAdditionalDetailRequests.AddRange(newRows);
+        await _db.SaveChangesAsync();
+
+        TempData["AdditionalDetailsSuccess"] =
+            "Additional details submitted to Admin for review.";
+        return RedirectToAction(nameof(AdditionalDetails));
     }
 
     // ---------------- Vendor Profile ----------------
@@ -58,6 +346,14 @@ public class VendorController : Controller
         // Share the real application status with the Profile view.
         ViewBag.ApplicationStatus = application.Status;
         ViewBag.ApplicationSubmittedAt = application.SubmittedAt;
+        ViewBag.ApprovedAdditionalDetails = await _db.VendorAdditionalDetailRequests
+            .AsNoTracking()
+            .Where(x => x.VendorProfileId == profile.VendorProfileId &&
+                        x.Status == AdditionalDetailStatus.Approved)
+            .OrderBy(x => x.District)
+            .ThenBy(x => x.WorkType)
+            .ThenBy(x => x.SubWorkType)
+            .ToListAsync();
 
         // Show the latest Admin decision/review remarks, when available.
         ViewBag.LatestDecisionRemarks = application.DecisionHistory
@@ -102,7 +398,7 @@ public class VendorController : Controller
         ViewBag.CertificateIssuedAtUtc = latestCertificate?.IssuedAtUtc;
         ViewBag.CertificateValidUntilUtc = latestCertificate?.ValidUntilUtc;
         ViewBag.CertificateDownloadCount = latestCertificate?.DownloadCount ?? 0;
-        ViewBag.CertificateMaxDownloads = latestCertificate?.MaxDownloads ?? 5;
+        ViewBag.CertificateMaxDownloads = latestCertificate?.MaxDownloads ?? 15;
         ViewBag.CertificateIsRevoked = latestCertificate?.IsRevoked ?? false;
         ViewBag.CertificateVerificationUrl = latestCertificate == null
             ? null
@@ -112,99 +408,6 @@ public class VendorController : Controller
                 new { token = latestCertificate.VerificationToken });
 
         return View(profile);
-    }
-
-    // ---------------- Update Certificate Type and Remarks ----------------
-
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> UpdateVendorDetails(
-        VendorProfileDetailsViewModel m)
-    {
-        // Allow only Admin or Material.
-        if (m.Cert_Type != "Admin" &&
-            m.Cert_Type != "Material")
-        {
-            TempData["ProfileError"] =
-                "Please select Admin or Material as the Certificate Type.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
-        // Enforce maximum 100 words on the server.
-        var remarks = m.Remarks?.Trim();
-
-        var wordCount = string.IsNullOrWhiteSpace(remarks)
-            ? 0
-            : Regex.Matches(remarks, @"\S+").Count;
-
-        if (wordCount > 100)
-        {
-            TempData["ProfileError"] =
-                "Remarks cannot exceed 100 words.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
-        // Validate ViewModel attributes, including maximum character length.
-        if (!ModelState.IsValid)
-        {
-            TempData["ProfileError"] =
-                "Please check the submitted details and try again.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
-        // Confirm that the vendor's application is editable.
-        var application = await _apps.GetForVendorAsync(UserId);
-
-        if (application == null)
-        {
-            return NotFound("Vendor application not found.");
-        }
-
-        var canEdit = application.Status is
-            ApplicationStatus.Draft or
-            ApplicationStatus.CorrectionsRequired;
-
-        if (!canEdit)
-        {
-            TempData["ProfileError"] =
-                "Additional details cannot be changed for the current application status.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
-        // Get only the logged-in vendor's profile.
-        var vendorProfile = await _db.VendorProfiles
-            .SingleOrDefaultAsync(p => p.UserId == UserId);
-
-        if (vendorProfile == null)
-        {
-            return NotFound("Vendor profile not found.");
-        }
-
-        // Update the two database columns.
-        vendorProfile.Cert_Type = m.Cert_Type;
-
-        vendorProfile.Remarks = string.IsNullOrWhiteSpace(remarks)
-            ? null
-            : remarks;
-
-        try
-        {
-            await _db.SaveChangesAsync();
-
-            TempData["ProfileSuccess"] =
-                "Certificate Type and Remarks saved successfully.";
-        }
-        catch (DbUpdateException)
-        {
-            TempData["ProfileError"] =
-                "Unable to save the additional details. Please try again.";
-        }
-
-        return RedirectToAction(nameof(Dashboard));
     }
 
     // ---------------- Document Upload / Replace ----------------
@@ -220,6 +423,21 @@ public class VendorController : Controller
         TempData[error == null ? "Success" : "Error"] =
             error ?? $"{type.DisplayName()} uploaded.";
 
+        return RedirectToAction(nameof(Dashboard));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UploadRevalidationDocument(
+        int revalidationDocumentId,
+        IFormFile? file)
+    {
+        var error = await _apps.UploadRevalidationDocumentAsync(
+            UserId,
+            revalidationDocumentId,
+            file);
+
+        TempData[error is null ? "Success" : "Error"] = error ?? "Document uploaded for admin review.";
         return RedirectToAction(nameof(Dashboard));
     }
 
@@ -243,31 +461,6 @@ public class VendorController : Controller
             return RedirectToAction(nameof(Dashboard));
         }
 
-        // Validate certificate type.
-        if (m.Cert_Type != "Admin" && m.Cert_Type != "Material")
-        {
-            TempData["Error"] =
-                "Please select Admin or Material as the Certificate Type.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
-        // Validate Remarks: maximum 100 words.
-        var remarks = m.Remarks?.Trim();
-
-        var wordCount = string.IsNullOrWhiteSpace(remarks)
-            ? 0
-            : Regex.Matches(
-                remarks,
-                @"[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*"
-              ).Count;
-
-        if (wordCount > 100)
-        {
-            TempData["Error"] = "Remarks cannot exceed 100 words.";
-            return RedirectToAction(nameof(Dashboard));
-        }
-
         if (!ModelState.IsValid)
         {
             TempData["Error"] =
@@ -275,13 +468,6 @@ public class VendorController : Controller
 
             return RedirectToAction(nameof(Dashboard));
         }
-
-        // Find the vendor's own profile.
-        var vendorProfile = await _db.VendorProfiles
-            .SingleOrDefaultAsync(p => p.UserId == UserId);
-
-        if (vendorProfile == null)
-            return NotFound("Vendor profile not found.");
 
         // Keep only files actually selected by the vendor.
         var uploads = (m.Uploads ?? new())
@@ -352,25 +538,6 @@ public class VendorController : Controller
             }
         }
 
-        // Save Certificate Type and Remarks in VendorProfiles.
-        vendorProfile.Cert_Type = m.Cert_Type;
-        vendorProfile.Remarks = string.IsNullOrWhiteSpace(remarks)
-            ? null
-            : remarks;
-
-        try
-        {
-            await _db.SaveChangesAsync();
-        }
-        catch (DbUpdateException)
-        {
-            TempData["Error"] =
-                "The profile details could not be saved. " +
-                "Any completed document uploads may already be saved.";
-
-            return RedirectToAction(nameof(Dashboard));
-        }
-
         // Submit only after processing files and profile details.
         var submissionError = await _apps.SubmitAsync(UserId);
 
@@ -383,7 +550,7 @@ public class VendorController : Controller
         }
 
         TempData["Success"] =
-            "Application details saved, documents uploaded, and application submitted successfully.";
+            "Documents uploaded and application submitted successfully.";
 
         return RedirectToAction(nameof(Dashboard));
     }

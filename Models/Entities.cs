@@ -58,9 +58,12 @@ public class VendorProfile
     [MaxLength(150)]
     public string? TradeName { get; set; }
 
-    // Matches the existing database NVARCHAR(10) column.
+    // Work type values come from the existing tbl_WorkType reference table.
     [MaxLength(10)]
     public string? Cert_Type { get; set; }
+
+    [MaxLength(100)]
+    public string? SubWorkType { get; set; }
 
     public string? Remarks { get; set; }
 
@@ -68,6 +71,7 @@ public class VendorProfile
 
     public List<VendorApplication> Applications { get; set; } = new();
     public List<VendorCertificate> Certificates { get; set; } = new();
+    public List<VendorAdditionalDetailRequest> AdditionalDetailRequests { get; set; } = new();
 }
 
 public class MasterDistrict
@@ -75,6 +79,14 @@ public class MasterDistrict
     public int Id { get; set; }
     public int DistrictCode { get; set; }
     public string DistrictName { get; set; } = string.Empty;
+}
+
+public class MasterWorkType
+{
+    public int Id { get; set; }
+    public string WorkType { get; set; } = string.Empty;
+    public string SubWorkType { get; set; } = string.Empty;
+    public DateTime UploadedAt { get; set; }
 }
 
 public class VendorApplication
@@ -91,13 +103,71 @@ public class VendorApplication
     public List<VendorDocument> Documents { get; set; } = new();
     public List<ApplicationDecisionHistory> DecisionHistory { get; set; } = new();
     public List<VendorCertificate> Certificates { get; set; } = new();
+    public List<CertificateRevalidationCycle> RevalidationCycles { get; set; } = new();
+    public List<VendorAdditionalDetailRequest> AdditionalDetailRequests { get; set; } = new();
 }
 
 
 /// <summary>
+/// One row in a vendor's grouped request for approved district/work-type coverage.
+/// Rows in one batch share RequestBatchId so one Admin decision issues at most one certificate.
+/// </summary>
+public class VendorAdditionalDetailRequest
+{
+    [Key]
+    public int VendorAdditionalDetailRequestId { get; set; }
+
+    public Guid RequestBatchId { get; set; }
+
+    public int VendorProfileId { get; set; }
+    public VendorProfile VendorProfile { get; set; } = default!;
+
+    public int ApplicationId { get; set; }
+    public VendorApplication Application { get; set; } = default!;
+
+    [Required, MaxLength(100)]
+    public string District { get; set; } = default!;
+
+    [Required, MaxLength(100)]
+    public string WorkType { get; set; } = default!;
+
+    [Required, MaxLength(150)]
+    public string SubWorkType { get; set; } = default!;
+
+    [MaxLength(4000)]
+    public string? Remarks { get; set; }
+
+    public AdditionalDetailStatus Status { get; set; } = AdditionalDetailStatus.PendingReview;
+
+    [Required]
+    public string RequestedByVendorId { get; set; } = default!;
+    public ApplicationUser RequestedByVendor { get; set; } = default!;
+
+    public DateTime SubmittedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public string? ReviewedByAdminId { get; set; }
+    public ApplicationUser? ReviewedByAdmin { get; set; }
+    public DateTime? ReviewedAtUtc { get; set; }
+
+    [MaxLength(1000)]
+    public string? ReviewRemarks { get; set; }
+}
+
+/// <summary>
+/// Immutable display-only work coverage captured on a certificate at issue time.
+/// Remarks deliberately do not appear in this snapshot.
+/// </summary>
+public class CertificateAdditionalDetailSnapshot
+{
+    public string District { get; set; } = string.Empty;
+    public string WorkType { get; set; } = string.Empty;
+    public string SubWorkType { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// An immutable certificate issued after an Admin's successful final approval.
-/// A new record is created for each approval/renewal so every certificate keeps
-/// its own validity period and download limit.
+/// A new record is created for each issue/update. Versions share the UCAN validity
+/// period and each begins with its own download allowance.
 /// </summary>
 public class VendorCertificate
 {
@@ -157,11 +227,18 @@ public class VendorCertificate
     [MaxLength(10)]
     public string? RegistrationType { get; set; }
 
+    // Snapshot of the selected sub-work type at issuance.
+    [MaxLength(100)]
+    public string? SubWorkType { get; set; }
+
+    // Immutable JSON snapshot of approved District / Work Type / Sub Work Type rows.
+    public string? AdditionalDetailsSnapshotJson { get; set; }
+
     public DateTime IssuedAtUtc { get; set; }
     public DateTime ValidUntilUtc { get; set; }
 
     // These are set by server-side certificate generation, never by the vendor.
-    public int MaxDownloads { get; set; } = 5;
+    public int MaxDownloads { get; set; } = 15;
     public int DownloadCount { get; set; }
     public DateTime? LastDownloadedAtUtc { get; set; }
 
@@ -221,6 +298,8 @@ public class DocumentVersion
     [MaxLength(100)] public string ContentType { get; set; } = default!;
     public long SizeBytes { get; set; }
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+    public string? UploadedByUserId { get; set; }
+    public ApplicationUser? UploadedBy { get; set; }
     public List<DocumentReviewHistory> Reviews { get; set; } = new();
 }
 
@@ -249,4 +328,64 @@ public class ApplicationDecisionHistory
     public ApplicationStatus NewStatus { get; set; }
     [MaxLength(1000)] public string? Remarks { get; set; }
     public DateTime DecidedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// A document revalidation round for an already approved vendor. It remains
+/// separate from the original application so previous approval and certificate
+/// history stay intact.
+/// </summary>
+public class CertificateRevalidationCycle
+{
+    [Key]
+    public int CertificateRevalidationCycleId { get; set; }
+
+    public int ApplicationId { get; set; }
+    public VendorApplication Application { get; set; } = default!;
+
+    public CertificateRevalidationStatus Status { get; set; } = CertificateRevalidationStatus.Open;
+
+    [Required]
+    public string RequestedByAdminId { get; set; } = default!;
+    public ApplicationUser RequestedByAdmin { get; set; } = default!;
+    public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public string? ApprovedByAdminId { get; set; }
+    public ApplicationUser? ApprovedByAdmin { get; set; }
+    public DateTime? ApprovedAtUtc { get; set; }
+
+    public List<CertificateRevalidationDocument> Documents { get; set; } = new();
+}
+
+/// <summary>
+/// One document requested during a revalidation cycle. SubmittedVersionId
+/// pins approval to the exact file version submitted for this request.
+/// </summary>
+public class CertificateRevalidationDocument
+{
+    [Key]
+    public int CertificateRevalidationDocumentId { get; set; }
+
+    public int CertificateRevalidationCycleId { get; set; }
+    public CertificateRevalidationCycle Cycle { get; set; } = default!;
+
+    public int VendorDocumentId { get; set; }
+    public VendorDocument VendorDocument { get; set; } = default!;
+
+    public int? SubmittedVersionId { get; set; }
+    public DocumentVersion? SubmittedVersion { get; set; }
+
+    public DocumentStatus Status { get; set; } = DocumentStatus.NotSubmitted;
+
+    [Required]
+    public string RequestedByAdminId { get; set; } = default!;
+    public ApplicationUser RequestedByAdmin { get; set; } = default!;
+    public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public string? ReviewedByAdminId { get; set; }
+    public ApplicationUser? ReviewedByAdmin { get; set; }
+    public DateTime? ReviewedAtUtc { get; set; }
+
+    [MaxLength(1000)]
+    public string? ReviewRemarks { get; set; }
 }

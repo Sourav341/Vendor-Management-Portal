@@ -173,6 +173,8 @@ public sealed class CertificatesController : Controller
                 VendorName = c.VendorName,
                 CompanyFirmName = c.CompanyFirmName,
                 District = c.District,
+                WorkType = c.RegistrationType,
+                SubWorkType = c.SubWorkType,
                 UcanNumber = c.UcanNumber,
 
                 IssuedAtUtc = c.IssuedAtUtc,

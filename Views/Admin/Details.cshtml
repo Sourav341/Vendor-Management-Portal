@@ -8,6 +8,17 @@
         .Where(d => d.IsRequired)
         .All(d => d.Status == DocumentStatus.Approved);
     var hasUcan = !string.IsNullOrWhiteSpace(Model.VendorProfile.UcanNumber);
+    var certificateHistoryExists = ViewBag.CertificateHistoryExists is bool history && history;
+    var revalidationCycle = ViewBag.RevalidationCycle as CertificateRevalidationCycle;
+    var availableRevalidationDocumentTypes =
+        ViewBag.AvailableRevalidationDocumentTypes as List<DocumentType> ?? new List<DocumentType>();
+    var revalidationIsOpen = revalidationCycle?.Status == CertificateRevalidationStatus.Open;
+    var allRevalidationDocumentsApproved = revalidationIsOpen &&
+        revalidationCycle!.Documents.Count > 0 &&
+        revalidationCycle.Documents.All(d =>
+            d.Status == DocumentStatus.Approved && d.SubmittedVersionId != null);
+    var additionalDetailRequests =
+        ViewBag.AdditionalDetailRequests as List<VendorAdditionalDetailRequest> ?? new();
 }
 
 <div class="review-back-row">
@@ -31,13 +42,116 @@
     <div class="summary-item"><span class="summary-label">GST registration</span><span class="summary-value">@Model.VendorProfile.GstNumber</span></div>
 </div>
 
+<section class="portal-panel portal-section" aria-labelledby="admin-additional-details-title">
+    <div class="panel-heading">
+        <div>
+            <h3 id="admin-additional-details-title">Additional Details review</h3>
+            <p>Review each request batch. Removing approved coverage is Admin-only and issues an updated certificate.</p>
+        </div>
+    </div>
+
+    @if (additionalDetailRequests.Count == 0)
+    {
+        <div class="p-3 text-muted">No Additional Details requests have been submitted.</div>
+    }
+    else
+    {
+        @foreach (var batch in additionalDetailRequests
+            .GroupBy(x => x.RequestBatchId)
+            .OrderByDescending(g => g.Max(x => x.SubmittedAtUtc)))
+        {
+            var first = batch.First();
+            var isPending = batch.All(x => x.Status == AdditionalDetailStatus.PendingReview);
+            var batchStatuses = batch.Select(x => x.Status).Distinct().ToList();
+            var batchBadge = batchStatuses.Count == 1 ? batchStatuses[0].Badge() : "secondary";
+            var batchStatus = batchStatuses.Count == 1 ? batchStatuses[0].ToString() : "Mixed status";
+            <div class="p-3 border-bottom">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <div>
+                        <div class="fw-semibold">Request from @first.RequestedByVendor.Email</div>
+                        <div class="small text-muted">Submitted @first.SubmittedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                    </div>
+                    <span class="badge bg-@batchBadge">@batchStatus</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-3">
+                        <thead><tr><th>District</th><th>Work Type</th><th>Sub Work Type</th><th>Vendor remarks</th><th>Status / Admin note</th><th>Action</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in batch)
+                        {
+                            <tr>
+                                <td>@row.District</td>
+                                <td>@row.WorkType</td>
+                                <td>@row.SubWorkType</td>
+                                <td>@(string.IsNullOrWhiteSpace(row.Remarks) ? "—" : row.Remarks)</td>
+                                <td>
+                                    <span class="badge bg-@row.Status.Badge()">@row.Status</span>
+                                    @if (!string.IsNullOrWhiteSpace(row.ReviewRemarks))
+                                    {
+                                        <div class="small text-muted mt-1">@row.ReviewRemarks</div>
+                                    }
+                                    @if (row.ReviewedAtUtc.HasValue)
+                                    {
+                                        <div class="small text-muted mt-1">By @(row.ReviewedByAdmin?.Email ?? "Admin") on @row.ReviewedAtUtc.Value.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                    }
+                                </td>
+                                <td>
+                                    @if (Model.Status == ApplicationStatus.Approved &&
+                                         row.Status == AdditionalDetailStatus.Approved)
+                                    {
+                                        <form asp-action="RemoveApprovedAdditionalDetail"
+                                              method="post"
+                                              onsubmit="return confirm('Remove this approved coverage and issue an updated certificate?')">
+                                            <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                                            <input type="hidden" name="requestId" value="@row.VendorAdditionalDetailRequestId" />
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">Remove coverage</button>
+                                        </form>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(first.ReviewRemarks))
+                {
+                    <div class="small mb-2"><strong>Previous review remarks:</strong> @first.ReviewRemarks</div>
+                }
+                @if (first.ReviewedAtUtc.HasValue)
+                {
+                    <div class="small text-muted mb-2">
+                        Reviewed by @(first.ReviewedByAdmin?.Email ?? "Admin") on @first.ReviewedAtUtc.Value.ToLocalTime().ToString("dd MMM yyyy HH:mm")
+                    </div>
+                }
+                @if (isPending && Model.Status is ApplicationStatus.PendingReview or ApplicationStatus.UnderReview or ApplicationStatus.Approved)
+                {
+                    <form asp-action="ReviewAdditionalDetails" method="post" class="review-action-form">
+                        <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                        <input type="hidden" name="requestBatchId" value="@first.RequestBatchId" />
+                        <input name="remarks" class="form-control form-control-sm" placeholder="Remarks (required to reject or request corrections)" maxlength="1000" aria-label="Admin remarks for Additional Details" />
+                        <div class="review-buttons">
+                            <button type="submit" name="action" value="Approve" class="btn btn-sm btn-success">Approve request</button>
+                            <button type="submit" name="action" value="RequestCorrections" class="btn btn-sm btn-outline-warning">Request corrections</button>
+                            <button type="submit" name="action" value="Reject" class="btn btn-sm btn-outline-danger">Reject request</button>
+                        </div>
+                    </form>
+                }
+            </div>
+        }
+    }
+</section>
+
 @if (Model.Status == ApplicationStatus.Approved)
 {
     <section class="portal-panel portal-section" aria-labelledby="certificate-issue-title">
         <div class="panel-heading">
             <div>
                 <h3 id="certificate-issue-title">Electronic Certificate</h3>
-                <p>Certificates are valid for two years from the issue date and allow five vendor downloads.</p>
+                <p>Certificate validity follows the original UCAN generation date. Each certificate version allows 15 vendor downloads.</p>
             </div>
         </div>
 
@@ -47,14 +161,20 @@
                 <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                     <div>
                         <div class="fw-semibold">Certificate already issued</div>
-                        <div class="small">Regenerate the PDF to apply the current layout, uploaded photo, and QR code.</div>
+                        <div class="small">Issue a refreshed certificate version. The UCAN and its original validity date stay the same; the QR token changes and the 15-download count resets.</div>
                     </div>
                     <form asp-action="RegenerateCertificatePdf" method="post" class="m-0"
                           >
                         <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
-                        <button type="submit" class="btn btn-outline-success">Regenerate PDF</button>
+                        <button type="submit" class="btn btn-outline-success">Issue refreshed certificate version</button>
                     </form>
                 </div>
+            </div>
+        }
+        else if (certificateHistoryExists)
+        {
+            <div class="alert alert-warning mb-0" role="status">
+                There is no active certificate. Start a document revalidation below to issue a fresh certificate.
             </div>
         }
         else if (!allRequiredDocumentsApproved)
@@ -86,6 +206,137 @@
     </section>
 }
 
+@if (Model.Status == ApplicationStatus.Approved && certificateHistoryExists)
+{
+    <section class="portal-panel portal-section" aria-labelledby="revalidation-title">
+        <div class="panel-heading">
+            <div>
+                <h3 id="revalidation-title">Certificate document revalidation</h3>
+                <p>Request only the documents that need updating. The current certificate remains active during review; a fresh one is issued after every requested document is approved.</p>
+            </div>
+        </div>
+
+        @if (revalidationCycle is { Status: CertificateRevalidationStatus.Open })
+        {
+            <div class="alert alert-info mx-3 mt-3" role="status">
+                Review opened by @revalidationCycle.RequestedByAdmin.Email on @revalidationCycle.RequestedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm").
+                You can add more document requirements before approving this review.
+            </div>
+        }
+        else if (revalidationCycle is { Status: CertificateRevalidationStatus.Approved })
+        {
+            <div class="alert alert-success mx-3 mt-3" role="status">
+                Last revalidation approved on @revalidationCycle.ApprovedAtUtc?.ToLocalTime().ToString("dd MMM yyyy HH:mm").
+            </div>
+        }
+
+        @if (availableRevalidationDocumentTypes.Count > 0)
+        {
+            <form asp-action="RequestRevalidationDocuments" method="post" class="p-3 border-bottom">
+                <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                <div class="fw-semibold mb-2">
+                    @(revalidationIsOpen ? "Add documents to this review" : "Start a document review")
+                </div>
+                <div class="row g-2 mb-3">
+                    @foreach (var type in availableRevalidationDocumentTypes)
+                    {
+                        <div class="col-md-6 col-lg-4">
+                            <label class="form-check border rounded p-2 ps-5 h-100">
+                                <input class="form-check-input" type="checkbox" name="documentTypes" value="@type" />
+                                <span class="form-check-label">@type.DisplayName()</span>
+                            </label>
+                        </div>
+                    }
+                </div>
+                <button type="submit" class="btn btn-outline-primary">
+                    @(revalidationIsOpen ? "Add selected documents" : "Request selected documents")
+                </button>
+            </form>
+        }
+        else if (revalidationIsOpen)
+        {
+            <div class="p-3 text-muted">Every available document type is already included in this review.</div>
+        }
+
+        @if (revalidationIsOpen)
+        {
+            <div class="table-responsive">
+                <table class="table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th scope="col">Requested document</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Submitted file</th>
+                            <th scope="col" style="min-width:340px">Admin review</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var request in revalidationCycle!.Documents.OrderBy(d => d.VendorDocument.DocumentType.DisplayOrder()))
+                        {
+                            <tr>
+                                <td>
+                                    <div class="fw-semibold">@request.VendorDocument.DocumentType.DisplayName()</div>
+                                    <div class="small text-muted">Requested by @request.RequestedByAdmin.Email on @request.RequestedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                </td>
+                                <td><span class="badge bg-@request.Status.Badge()">@request.Status</span></td>
+                                <td>
+                                    @if (request.SubmittedVersion is { } version)
+                                    {
+                                        <a asp-controller="Documents" asp-action="Get" asp-route-id="@version.DocumentVersionId" target="_blank" rel="noopener">v@(version.VersionNumber): @version.OriginalFileName</a>
+                                        <div class="small text-muted">Uploaded by @(version.UploadedBy?.Email ?? "Uploader not recorded") on @version.UploadedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")</div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">Not uploaded</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (request.Status == DocumentStatus.Pending && request.SubmittedVersionId != null)
+                                    {
+                                        <form asp-action="ReviewRevalidationDocument" method="post" class="review-action-form">
+                                            <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                                            <input type="hidden" name="revalidationDocumentId" value="@request.CertificateRevalidationDocumentId" />
+                                            <input name="remarks" class="form-control form-control-sm" placeholder="Remarks (required to reject)" maxlength="1000" aria-label="Remarks for @request.VendorDocument.DocumentType.DisplayName()" />
+                                            <div class="review-buttons">
+                                                <button type="submit" name="decision" value="Approved" class="btn btn-sm btn-success">Approve</button>
+                                                <button type="submit" name="decision" value="Rejected" class="btn btn-sm btn-outline-danger">Reject</button>
+                                            </div>
+                                        </form>
+                                    }
+                                    else if (request.ReviewedAtUtc is not null)
+                                    {
+                                        <div class="review-history-line">
+                                            <strong>@request.Status</strong>
+                                            <span>by @(request.ReviewedByAdmin?.Email ?? "Admin") on @request.ReviewedAtUtc.Value.ToLocalTime().ToString("dd MMM yyyy HH:mm")</span>
+                                            @if (!string.IsNullOrWhiteSpace(request.ReviewRemarks))
+                                            {
+                                                <p>@request.ReviewRemarks</p>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted small">Waiting for vendor upload</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 p-3">
+                <div class="small text-muted">The active certificate is kept until this review is approved.</div>
+                <form asp-action="ApproveRevalidation" method="post" class="m-0" onsubmit="return confirm('Approve this revalidation and issue a fresh certificate?');">
+                    <input type="hidden" name="applicationId" value="@Model.ApplicationId" />
+                    <input type="hidden" name="revalidationCycleId" value="@revalidationCycle!.CertificateRevalidationCycleId" />
+                    <button type="submit" class="btn btn-success" disabled="@(!allRevalidationDocumentsApproved)">Approve documents and issue fresh certificate</button>
+                </form>
+            </div>
+        }
+    </section>
+}
+
 <section class="portal-panel portal-section" aria-labelledby="review-documents-title">
     <div class="panel-heading">
         <div>
@@ -105,7 +356,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType))
+                @foreach (var d in Model.Documents.OrderBy(x => x.DocumentType.DisplayOrder()))
                 {
                     var v = d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
                     var rev = v?.Reviews.OrderByDescending(r => r.ReviewedAt).FirstOrDefault();
@@ -117,6 +368,10 @@
                             @if (v != null)
                             {
                                 <a asp-controller="Documents" asp-action="Get" asp-route-id="@v.DocumentVersionId" target="_blank" rel="noopener">v@(v.VersionNumber): @v.OriginalFileName</a>
+                                <div class="small text-muted">
+                                    Uploaded by @(v.UploadedBy?.Email ?? "Uploader not recorded")
+                                    on @v.UploadedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")
+                                </div>
                             }
                             else
                             {

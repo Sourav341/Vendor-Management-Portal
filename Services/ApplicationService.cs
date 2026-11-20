@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using VendorPortal.Data;
@@ -17,7 +18,7 @@ public class ApplicationService
     private const int UcanRandomNumberLength = 4;
     private const int UcanRandomNumberLimit = 10_000;
     private const int CertificateValidityYears = 2;
-    private const int MaxCertificateDownloads = 5;
+    private const int MaxCertificateDownloads = 15;
 
     private const string UcanGenerationLockSql = @"
 DECLARE @LockResult INT;
@@ -64,6 +65,7 @@ IF @LockResult < 0
             .Include(a => a.VendorProfile)
             .Include(a => a.DecisionHistory)
             .Include(a => a.Documents).ThenInclude(d => d.Versions).ThenInclude(v => v.Reviews)
+            .Include(a => a.Documents).ThenInclude(d => d.Versions).ThenInclude(v => v.UploadedBy)
             .Where(a => a.VendorProfile.UserId == userId)
             .OrderByDescending(a => a.ApplicationId)
             .AsSplitQuery()
@@ -75,6 +77,7 @@ IF @LockResult < 0
             .Include(a => a.VendorProfile).ThenInclude(p => p.User)
             .Include(a => a.DecisionHistory).ThenInclude(h => h.Admin)
             .Include(a => a.Documents).ThenInclude(d => d.Versions).ThenInclude(v => v.Reviews).ThenInclude(r => r.Reviewer)
+            .Include(a => a.Documents).ThenInclude(d => d.Versions).ThenInclude(v => v.UploadedBy)
             .AsSplitQuery()
             .FirstOrDefaultAsync(a => a.ApplicationId == id);
 
@@ -109,7 +112,9 @@ IF @LockResult < 0
             StorageKey = key,
             OriginalFileName = Path.GetFileName(file!.FileName),
             ContentType = contentType,
-            SizeBytes = file.Length
+            SizeBytes = file.Length,
+            UploadedAt = DateTime.UtcNow,
+            UploadedByUserId = userId
         });
         doc.Status = DocumentStatus.Pending;
         await _db.SaveChangesAsync();
@@ -121,6 +126,13 @@ IF @LockResult < 0
         var app = await GetForVendorAsync(userId);
         if (app.Status is not (ApplicationStatus.Draft or ApplicationStatus.CorrectionsRequired))
             return "This application has already been submitted.";
+
+        var hasAdditionalDetails = await _db.VendorAdditionalDetailRequests.AnyAsync(x =>
+            x.VendorProfileId == app.VendorProfileId &&
+            (x.Status == AdditionalDetailStatus.PendingReview ||
+             x.Status == AdditionalDetailStatus.Approved));
+        if (!hasAdditionalDetails)
+            return "Submit at least one Additional Details request before submitting the application.";
 
         var missing = app.Documents.Where(d => d.IsRequired && d.Status == DocumentStatus.NotSubmitted)
                                    .Select(d => d.DocumentType.DisplayName()).ToList();
@@ -159,6 +171,507 @@ IF @LockResult < 0
         return null;
     }
 
+    public async Task<string?> RequestRevalidationDocumentsAsync(
+        string adminId,
+        int applicationId,
+        IEnumerable<DocumentType>? requestedTypes)
+    {
+        var types = (requestedTypes ?? Array.Empty<DocumentType>())
+            .Distinct()
+            .ToList();
+
+        if (types.Count == 0)
+            return "Select at least one document to request.";
+
+        if (types.Any(type => !Enum.IsDefined(type)))
+            return "One or more selected document types are invalid.";
+
+        var application = await _db.VendorApplications
+            .Include(a => a.Documents)
+            .FirstOrDefaultAsync(a => a.ApplicationId == applicationId);
+
+        if (application is null)
+            return "Application not found.";
+
+        if (application.Status != ApplicationStatus.Approved)
+            return "Document revalidation is only available for approved vendors.";
+
+        if (!await _db.VendorCertificates.AnyAsync(c => c.ApplicationId == applicationId))
+            return "A certificate must have been issued before requesting revalidation.";
+
+        var cycle = await _db.CertificateRevalidationCycles
+            .Include(c => c.Documents)
+                .ThenInclude(d => d.VendorDocument)
+            .FirstOrDefaultAsync(c =>
+                c.ApplicationId == applicationId &&
+                c.Status == CertificateRevalidationStatus.Open);
+
+        var requestedAtUtc = DateTime.UtcNow;
+        if (cycle is null)
+        {
+            cycle = new CertificateRevalidationCycle
+            {
+                ApplicationId = application.ApplicationId,
+                Application = application,
+                Status = CertificateRevalidationStatus.Open,
+                RequestedByAdminId = adminId,
+                RequestedAtUtc = requestedAtUtc
+            };
+            _db.CertificateRevalidationCycles.Add(cycle);
+        }
+
+        var addedCount = 0;
+        foreach (var type in types)
+        {
+            if (cycle.Documents.Any(d => d.VendorDocument.DocumentType == type))
+                continue;
+
+            var vendorDocument = application.Documents
+                .FirstOrDefault(d => d.DocumentType == type);
+
+            if (vendorDocument is null)
+            {
+                // A newer document type may not have existed when this vendor
+                // originally registered. Add its row without changing the
+                // original application's required-document checklist.
+                vendorDocument = new VendorDocument
+                {
+                    ApplicationId = application.ApplicationId,
+                    Application = application,
+                    DocumentType = type,
+                    IsRequired = false,
+                    Status = DocumentStatus.NotSubmitted
+                };
+                application.Documents.Add(vendorDocument);
+            }
+
+            cycle.Documents.Add(new CertificateRevalidationDocument
+            {
+                VendorDocument = vendorDocument,
+                Status = DocumentStatus.NotSubmitted,
+                RequestedByAdminId = adminId,
+                RequestedAtUtc = requestedAtUtc
+            });
+            addedCount++;
+        }
+
+        if (addedCount == 0)
+            return "All selected documents are already included in the open revalidation.";
+
+        await _db.SaveChangesAsync();
+        return null;
+    }
+
+    public async Task<string?> UploadRevalidationDocumentAsync(
+        string userId,
+        int revalidationDocumentId,
+        IFormFile? file)
+    {
+        var request = await _db.CertificateRevalidationDocuments
+            .Include(d => d.Cycle).ThenInclude(c => c.Application).ThenInclude(a => a.VendorProfile)
+            .Include(d => d.VendorDocument).ThenInclude(d => d.Versions)
+            .FirstOrDefaultAsync(d =>
+                d.CertificateRevalidationDocumentId == revalidationDocumentId &&
+                d.Cycle.Application.VendorProfile.UserId == userId);
+
+        if (request is null)
+            return "Requested document not found.";
+
+        if (request.Cycle.Status != CertificateRevalidationStatus.Open)
+            return "This document revalidation is closed.";
+
+        if (request.Cycle.Application.Status != ApplicationStatus.Approved)
+            return "The vendor application is not approved.";
+
+        if (request.Status == DocumentStatus.Approved)
+            return "This document has already been approved for the current revalidation.";
+
+        if (request.Status == DocumentStatus.Pending)
+            return "This upload is awaiting admin review.";
+
+        var type = request.VendorDocument.DocumentType;
+        var error = FileStorageService.Validate(file, type);
+        if (error is not null)
+            return error;
+
+        var (key, contentType) = await _files.SaveAsync(file!);
+        var version = new DocumentVersion
+        {
+            VersionNumber = request.VendorDocument.Versions.Count == 0
+                ? 1
+                : request.VendorDocument.Versions.Max(v => v.VersionNumber) + 1,
+            StorageKey = key,
+            OriginalFileName = Path.GetFileName(file!.FileName),
+            ContentType = contentType,
+            SizeBytes = file.Length,
+            UploadedAt = DateTime.UtcNow,
+            UploadedByUserId = userId
+        };
+
+        request.VendorDocument.Versions.Add(version);
+        request.SubmittedVersion = version;
+        request.Status = DocumentStatus.Pending;
+        request.ReviewedByAdminId = null;
+        request.ReviewedAtUtc = null;
+        request.ReviewRemarks = null;
+        request.VendorDocument.Status = DocumentStatus.Pending;
+
+        await _db.SaveChangesAsync();
+        return null;
+    }
+
+    public async Task<string?> ReviewRevalidationDocumentAsync(
+        string adminId,
+        int revalidationDocumentId,
+        ReviewDecision decision,
+        string? remarks)
+    {
+        if (!Enum.IsDefined(decision))
+            return "Review decision is invalid.";
+
+        var request = await _db.CertificateRevalidationDocuments
+            .Include(d => d.Cycle).ThenInclude(c => c.Application)
+            .Include(d => d.VendorDocument)
+            .Include(d => d.SubmittedVersion)
+            .FirstOrDefaultAsync(d => d.CertificateRevalidationDocumentId == revalidationDocumentId);
+
+        if (request is null)
+            return "Requested document not found.";
+
+        if (request.Cycle.Status != CertificateRevalidationStatus.Open ||
+            request.Cycle.Application.Status != ApplicationStatus.Approved)
+            return "This document revalidation is not open for review.";
+
+        if (request.Status != DocumentStatus.Pending || request.SubmittedVersion is null)
+            return "There is no pending upload to review.";
+
+        if (decision == ReviewDecision.Rejected && string.IsNullOrWhiteSpace(remarks))
+            return "Remarks are required when rejecting a document.";
+
+        var reviewedAtUtc = DateTime.UtcNow;
+        request.Status = decision == ReviewDecision.Approved
+            ? DocumentStatus.Approved
+            : DocumentStatus.Rejected;
+        request.ReviewedByAdminId = adminId;
+        request.ReviewedAtUtc = reviewedAtUtc;
+        request.ReviewRemarks = remarks?.Trim();
+        request.VendorDocument.Status = request.Status;
+
+        _db.DocumentReviewHistories.Add(new DocumentReviewHistory
+        {
+            DocumentVersionId = request.SubmittedVersionId!.Value,
+            ReviewerUserId = adminId,
+            Decision = decision,
+            Remarks = remarks?.Trim(),
+            ReviewedAt = reviewedAtUtc
+        });
+
+        await _db.SaveChangesAsync();
+        return null;
+    }
+
+    public async Task<string?> ReviewAdditionalDetailsAsync(
+        string adminId,
+        int applicationId,
+        Guid requestBatchId,
+        string action,
+        string? remarks)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        string? generatedPdfStorageKey = null;
+
+        try
+        {
+            var rows = await _db.VendorAdditionalDetailRequests
+                .Include(x => x.Application)
+                .Include(x => x.VendorProfile)
+                .Where(x => x.ApplicationId == applicationId && x.RequestBatchId == requestBatchId)
+                .ToListAsync();
+
+            if (rows.Count == 0)
+                return "Additional Details request not found.";
+            if (rows.Any(x => x.Status != AdditionalDetailStatus.PendingReview))
+                return "This Additional Details request is no longer waiting for review.";
+
+            var application = rows[0].Application;
+            var profile = rows[0].VendorProfile;
+            if (application.Status is not (
+                    ApplicationStatus.PendingReview or
+                    ApplicationStatus.UnderReview or
+                    ApplicationStatus.Approved))
+                return "The vendor application is not open for this review.";
+
+            var reviewedAtUtc = DateTime.UtcNow;
+            AdditionalDetailStatus nextStatus;
+            switch (action)
+            {
+                case "Approve":
+                    nextStatus = AdditionalDetailStatus.Approved;
+                    break;
+                case "Reject":
+                    if (string.IsNullOrWhiteSpace(remarks))
+                        return "Remarks are required when rejecting Additional Details.";
+                    nextStatus = AdditionalDetailStatus.Rejected;
+                    break;
+                case "RequestCorrections":
+                    if (string.IsNullOrWhiteSpace(remarks))
+                        return "Remarks are required when asking the vendor to correct Additional Details.";
+                    nextStatus = AdditionalDetailStatus.CorrectionsRequired;
+                    break;
+                default:
+                    return "Unknown Additional Details review action.";
+            }
+
+            var activeCertificatesForUpdate = new List<VendorCertificate>();
+            if (nextStatus == AdditionalDetailStatus.Approved &&
+                application.Status == ApplicationStatus.Approved)
+            {
+                var requiredDocumentsApproved = await _db.VendorDocuments
+                    .Where(x => x.ApplicationId == applicationId && x.IsRequired)
+                    .AllAsync(x => x.Status == DocumentStatus.Approved);
+                if (!requiredDocumentsApproved)
+                    return "Every required document must be approved before updating the certificate.";
+
+                if (string.IsNullOrWhiteSpace(profile.UcanNumber))
+                    return "The vendor must have a UCAN before Additional Details can update the certificate.";
+
+                if (!profile.UcanGeneratedAt.HasValue)
+                    profile.UcanGeneratedAt = await GetLegacyUcanGeneratedAtAsync(profile);
+
+                activeCertificatesForUpdate = await _db.VendorCertificates
+                    .Where(x => x.VendorProfileId == profile.VendorProfileId && !x.IsRevoked)
+                    .ToListAsync();
+                if (activeCertificatesForUpdate.Count == 0)
+                    return "An active certificate is required before updating certificate coverage.";
+            }
+
+            foreach (var row in rows)
+            {
+                row.Status = nextStatus;
+                row.ReviewedByAdminId = adminId;
+                row.ReviewedAtUtc = reviewedAtUtc;
+                row.ReviewRemarks = string.IsNullOrWhiteSpace(remarks) ? null : remarks.Trim();
+            }
+
+            await _db.SaveChangesAsync();
+
+            if (nextStatus == AdditionalDetailStatus.Approved &&
+                application.Status == ApplicationStatus.Approved)
+            {
+                foreach (var previousCertificate in activeCertificatesForUpdate)
+                {
+                    previousCertificate.IsRevoked = true;
+                    previousCertificate.RevokedAtUtc = reviewedAtUtc;
+                    previousCertificate.RevocationReason =
+                        "Superseded after Additional Details were approved.";
+                }
+
+                var certificate = new VendorCertificate
+                {
+                    VendorProfileId = profile.VendorProfileId,
+                    ApplicationId = applicationId,
+                    CertificateNumber = CreateCertificateNumber(reviewedAtUtc),
+                    VerificationToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+                    PdfStorageKey = string.Empty,
+                    VendorName = profile.FullName,
+                    CompanyFirmName = profile.TradeName,
+                    FatherOrHusbandName = profile.Father_Husband_Name,
+                    DateOfBirth = profile.DOB,
+                    Gender = profile.Gender,
+                    RegisteredAddress = profile.Trade_Address,
+                    District = profile.District,
+                    PanNumber = profile.PanNumber,
+                    GstNumber = profile.GstNumber,
+                    UcanNumber = profile.UcanNumber!,
+                    RegistrationType = profile.Cert_Type,
+                    SubWorkType = profile.SubWorkType,
+                    AdditionalDetailsSnapshotJson =
+                        await SerializeApprovedAdditionalDetailsAsync(profile.VendorProfileId, profile),
+                    IssuedAtUtc = reviewedAtUtc,
+                    ValidUntilUtc = GetUcanValidityStart(profile).AddYears(CertificateValidityYears),
+                    MaxDownloads = MaxCertificateDownloads,
+                    DownloadCount = 0,
+                    GeneratedByAdminId = adminId,
+                    IsRevoked = false,
+                    CreatedAtUtc = reviewedAtUtc
+                };
+
+                generatedPdfStorageKey = await _certificates.GeneratePdfAsync(certificate);
+                certificate.PdfStorageKey = generatedPdfStorageKey;
+                _db.VendorCertificates.Add(certificate);
+                await _db.SaveChangesAsync();
+            }
+
+            await transaction.CommitAsync();
+            return null;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            TryDeleteGeneratedCertificateFile(generatedPdfStorageKey);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    public async Task<string?> RemoveApprovedAdditionalDetailAsync(
+        string adminId,
+        int applicationId,
+        int requestId)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        string? generatedPdfStorageKey = null;
+
+        try
+        {
+            var row = await _db.VendorAdditionalDetailRequests
+                .Include(x => x.Application)
+                .Include(x => x.VendorProfile)
+                .FirstOrDefaultAsync(x =>
+                    x.VendorAdditionalDetailRequestId == requestId &&
+                    x.ApplicationId == applicationId);
+
+            if (row is null)
+                return "Additional Details row not found.";
+            if (row.Status != AdditionalDetailStatus.Approved)
+                return "Only approved Additional Details rows can be removed from coverage.";
+
+            var application = row.Application;
+            var profile = row.VendorProfile;
+            if (application.Status != ApplicationStatus.Approved)
+                return "The vendor application must be approved before removing approved coverage.";
+            if (string.IsNullOrWhiteSpace(profile.UcanNumber))
+                return "The vendor does not have a UCAN to update.";
+
+            var requiredDocumentsApproved = await _db.VendorDocuments
+                .Where(x => x.ApplicationId == applicationId && x.IsRequired)
+                .AllAsync(x => x.Status == DocumentStatus.Approved);
+            if (!requiredDocumentsApproved)
+                return "Every required document must be approved before updating the certificate.";
+
+            var activeCertificates = await _db.VendorCertificates
+                .Where(x => x.VendorProfileId == profile.VendorProfileId && !x.IsRevoked)
+                .ToListAsync();
+            if (activeCertificates.Count == 0)
+                return "An active certificate is required before removing approved coverage.";
+
+            if (!profile.UcanGeneratedAt.HasValue)
+                profile.UcanGeneratedAt = await GetLegacyUcanGeneratedAtAsync(profile);
+
+            var removedAtUtc = DateTime.UtcNow;
+            row.Status = AdditionalDetailStatus.RemovedByAdmin;
+            row.ReviewedByAdminId = adminId;
+            row.ReviewedAtUtc = removedAtUtc;
+            row.ReviewRemarks = "Removed from approved coverage by Admin.";
+            await _db.SaveChangesAsync();
+
+            foreach (var previousCertificate in activeCertificates)
+            {
+                previousCertificate.IsRevoked = true;
+                previousCertificate.RevokedAtUtc = removedAtUtc;
+                previousCertificate.RevocationReason =
+                    "Superseded after Admin removed approved Additional Details coverage.";
+            }
+
+            var certificate = new VendorCertificate
+            {
+                VendorProfileId = profile.VendorProfileId,
+                ApplicationId = applicationId,
+                CertificateNumber = CreateCertificateNumber(removedAtUtc),
+                VerificationToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+                PdfStorageKey = string.Empty,
+                VendorName = profile.FullName,
+                CompanyFirmName = profile.TradeName,
+                FatherOrHusbandName = profile.Father_Husband_Name,
+                DateOfBirth = profile.DOB,
+                Gender = profile.Gender,
+                RegisteredAddress = profile.Trade_Address,
+                District = profile.District,
+                PanNumber = profile.PanNumber,
+                GstNumber = profile.GstNumber,
+                UcanNumber = profile.UcanNumber,
+                RegistrationType = profile.Cert_Type,
+                SubWorkType = profile.SubWorkType,
+                AdditionalDetailsSnapshotJson =
+                    await SerializeApprovedAdditionalDetailsAsync(profile.VendorProfileId, profile),
+                IssuedAtUtc = removedAtUtc,
+                ValidUntilUtc = GetUcanValidityStart(profile).AddYears(CertificateValidityYears),
+                MaxDownloads = MaxCertificateDownloads,
+                DownloadCount = 0,
+                GeneratedByAdminId = adminId,
+                IsRevoked = false,
+                CreatedAtUtc = removedAtUtc
+            };
+
+            generatedPdfStorageKey = await _certificates.GeneratePdfAsync(certificate);
+            certificate.PdfStorageKey = generatedPdfStorageKey;
+            _db.VendorCertificates.Add(certificate);
+            await _db.SaveChangesAsync();
+
+            await transaction.CommitAsync();
+            return null;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            TryDeleteGeneratedCertificateFile(generatedPdfStorageKey);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    private async Task<string> SerializeApprovedAdditionalDetailsAsync(
+        int vendorProfileId,
+        VendorProfile profile)
+    {
+        var rows = await _db.VendorAdditionalDetailRequests
+            .AsNoTracking()
+            .Where(x => x.VendorProfileId == vendorProfileId &&
+                        x.Status == AdditionalDetailStatus.Approved)
+            .OrderBy(x => x.District)
+            .ThenBy(x => x.WorkType)
+            .ThenBy(x => x.SubWorkType)
+            .Select(x => new CertificateAdditionalDetailSnapshot
+            {
+                District = x.District,
+                WorkType = x.WorkType,
+                SubWorkType = x.SubWorkType
+            })
+            .ToListAsync();
+
+        // Preserve legacy coverage only for vendors who have never used the request table.
+        // If Admin removed every requested row, an empty approved set must stay empty.
+        var hasRequestHistory = await _db.VendorAdditionalDetailRequests
+            .AnyAsync(x => x.VendorProfileId == vendorProfileId);
+        if (rows.Count == 0 &&
+            !hasRequestHistory &&
+            !string.IsNullOrWhiteSpace(profile.Cert_Type) &&
+            !string.IsNullOrWhiteSpace(profile.SubWorkType))
+        {
+            rows.Add(new CertificateAdditionalDetailSnapshot
+            {
+                District = profile.District,
+                WorkType = profile.Cert_Type,
+                SubWorkType = profile.SubWorkType
+            });
+        }
+
+        return JsonSerializer.Serialize(rows);
+    }
+
+    private static DateTime GetUcanValidityStart(VendorProfile profile) =>
+        profile.UcanGeneratedAt ?? profile.CreatedAt;
+
+    private async Task<DateTime> GetLegacyUcanGeneratedAtAsync(VendorProfile profile)
+    {
+        var firstCertificateIssue = await _db.VendorCertificates
+            .Where(x => x.VendorProfileId == profile.VendorProfileId)
+            .Select(x => (DateTime?)x.IssuedAtUtc)
+            .MinAsync();
+
+        return firstCertificateIssue ?? profile.CreatedAt;
+    }
+
     public async Task<string?> FinalDecisionAsync(string adminId, int applicationId, string action, string? remarks)
     {
         await using var tx = await _db.Database.BeginTransactionAsync();
@@ -188,6 +701,21 @@ IF @LockResult < 0
                     if (app.VendorProfile is null)
                         return "Vendor profile not found. UCAN cannot be generated.";
 
+                    var detailStatuses = await _db.VendorAdditionalDetailRequests
+                        .AsNoTracking()
+                        .Where(x => x.VendorProfileId == app.VendorProfile.VendorProfileId)
+                        .Select(x => x.Status)
+                        .ToListAsync();
+
+                    if (!detailStatuses.Any(x => x == AdditionalDetailStatus.Approved))
+                        return "At least one Additional Details row must be approved before issuing the first certificate.";
+
+                    if (detailStatuses.Any(x =>
+                            x is AdditionalDetailStatus.PendingReview or
+                                AdditionalDetailStatus.CorrectionsRequired or
+                                AdditionalDetailStatus.Rejected))
+                        return "Approve or have the vendor resubmit every pending, rejected, or correction-required Additional Details row before approving the application.";
+
                     // Prevent a second certificate from being issued for the same application.
                     if (await _db.VendorCertificates.AnyAsync(c => c.ApplicationId == app.ApplicationId))
                         return "A certificate has already been issued for this application.";
@@ -209,8 +737,12 @@ IF @LockResult < 0
                 case "RequestCorrections":
                     if (string.IsNullOrWhiteSpace(remarks))
                         return "Remarks are required when requesting corrections.";
-                    if (!app.Documents.Any(d => d.Status == DocumentStatus.Rejected))
-                        return "Reject at least one document before requesting corrections.";
+                    var hasRejectedDetail = await _db.VendorAdditionalDetailRequests
+                        .AnyAsync(x =>
+                            x.VendorProfileId == app.VendorProfileId &&
+                            x.Status == AdditionalDetailStatus.Rejected);
+                    if (!app.Documents.Any(d => d.Status == DocumentStatus.Rejected) && !hasRejectedDetail)
+                        return "Reject at least one document or Additional Details request before requesting corrections.";
                     next = ApplicationStatus.CorrectionsRequired;
                     break;
 
@@ -257,8 +789,11 @@ IF @LockResult < 0
                     GstNumber = profile.GstNumber,
                     UcanNumber = profile.UcanNumber!,
                     RegistrationType = profile.Cert_Type,
+                    SubWorkType = profile.SubWorkType,
+                    AdditionalDetailsSnapshotJson =
+                        await SerializeApprovedAdditionalDetailsAsync(profile.VendorProfileId, profile),
                     IssuedAtUtc = decisionAtUtc,
-                    ValidUntilUtc = decisionAtUtc.AddYears(CertificateValidityYears),
+                    ValidUntilUtc = GetUcanValidityStart(profile).AddYears(CertificateValidityYears),
                     MaxDownloads = MaxCertificateDownloads,
                     DownloadCount = 0,
                     GeneratedByAdminId = adminId,
@@ -325,7 +860,11 @@ IF @LockResult < 0
     {
         // A vendor receives one permanent UCAN. Never replace an existing value.
         if (!string.IsNullOrWhiteSpace(profile.UcanNumber))
+        {
+            if (!profile.UcanGeneratedAt.HasValue)
+                profile.UcanGeneratedAt = await GetLegacyUcanGeneratedAtAsync(profile);
             return null;
+        }
 
         if (string.IsNullOrWhiteSpace(profile.District))
             return "Vendor district is missing. UCAN cannot be generated.";
@@ -392,6 +931,8 @@ IF @LockResult < 0
             RandomNumberGenerator.GetInt32(availableRandomNumbers.Count)];
 
         profile.UcanNumber = $"{UcanPrefix}{districtCode:D2}{randomNumber}";
+        profile.UcanRandomNumber = randomNumber;
+        profile.UcanGeneratedAt = DateTime.UtcNow;
         return null;
     }
 }

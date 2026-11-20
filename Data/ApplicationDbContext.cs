@@ -18,7 +18,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<DocumentVersion> DocumentVersions => Set<DocumentVersion>();
     public DbSet<DocumentReviewHistory> DocumentReviewHistories => Set<DocumentReviewHistory>();
     public DbSet<ApplicationDecisionHistory> ApplicationDecisionHistories => Set<ApplicationDecisionHistory>();
+    public DbSet<CertificateRevalidationCycle> CertificateRevalidationCycles => Set<CertificateRevalidationCycle>();
+    public DbSet<CertificateRevalidationDocument> CertificateRevalidationDocuments => Set<CertificateRevalidationDocument>();
     public DbSet<MasterDistrict> MasterDistricts => Set<MasterDistrict>();
+    public DbSet<MasterWorkType> MasterWorkTypes => Set<MasterWorkType>();
+    public DbSet<VendorAdditionalDetailRequest> VendorAdditionalDetailRequests => Set<VendorAdditionalDetailRequest>();
 
     // Certificate records and their download audit history.
     public DbSet<VendorCertificate> VendorCertificates => Set<VendorCertificate>();
@@ -46,6 +50,17 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .HasColumnName("District_name")
                 .HasMaxLength(40)
                 .IsRequired();
+        });
+
+        // Read the existing work-type lookup table; it is managed outside this application's migrations.
+        b.Entity<MasterWorkType>(e =>
+        {
+            e.ToTable("tbl_WorkType", table => table.ExcludeFromMigrations());
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("Id");
+            e.Property(x => x.WorkType).HasColumnName("WorkType").IsRequired();
+            e.Property(x => x.SubWorkType).HasColumnName("SubWorkType").IsRequired();
+            e.Property(x => x.UploadedAt).HasColumnName("UploadedAt");
         });
 
         b.Entity<VendorProfile>(e =>
@@ -79,6 +94,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // Certificate type is optional until provided by the vendor.
             e.Property(x => x.Cert_Type)
                 .HasMaxLength(10)
+                .IsRequired(false);
+
+            e.Property(x => x.SubWorkType)
+                .HasMaxLength(100)
                 .IsRequired(false);
 
             e.Property(x => x.Remarks)
@@ -119,6 +138,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             e.HasIndex(x => new { x.VendorDocumentId, x.VersionNumber })
                 .IsUnique();
+
+            e.HasIndex(x => x.UploadedByUserId);
+
+            e.HasOne(x => x.UploadedBy)
+                .WithMany()
+                .HasForeignKey(x => x.UploadedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<DocumentReviewHistory>(e =>
@@ -155,8 +181,107 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // One certificate record belongs to one approved application.
-        // A renewal uses a new application and therefore receives a new certificate.
+        b.Entity<CertificateRevalidationCycle>(e =>
+        {
+            e.Property(x => x.Status)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+
+            // Only one open document revalidation round may exist per application.
+            e.HasIndex(x => x.ApplicationId)
+                .IsUnique()
+                .HasFilter("[Status] = 'Open'");
+
+            e.HasOne(x => x.Application)
+                .WithMany(x => x.RevalidationCycles)
+                .HasForeignKey(x => x.ApplicationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.RequestedByAdmin)
+                .WithMany()
+                .HasForeignKey(x => x.RequestedByAdminId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.ApprovedByAdmin)
+                .WithMany()
+                .HasForeignKey(x => x.ApprovedByAdminId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<CertificateRevalidationDocument>(e =>
+        {
+            e.Property(x => x.Status)
+                .HasConversion<string>()
+                .HasMaxLength(20);
+
+            e.Property(x => x.ReviewRemarks)
+                .HasMaxLength(1000)
+                .IsRequired(false);
+
+            e.HasIndex(x => new { x.CertificateRevalidationCycleId, x.VendorDocumentId })
+                .IsUnique();
+
+            e.HasOne(x => x.Cycle)
+                .WithMany(x => x.Documents)
+                .HasForeignKey(x => x.CertificateRevalidationCycleId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.VendorDocument)
+                .WithMany()
+                .HasForeignKey(x => x.VendorDocumentId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.SubmittedVersion)
+                .WithMany()
+                .HasForeignKey(x => x.SubmittedVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.RequestedByAdmin)
+                .WithMany()
+                .HasForeignKey(x => x.RequestedByAdminId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.ReviewedByAdmin)
+                .WithMany()
+                .HasForeignKey(x => x.ReviewedByAdminId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<VendorAdditionalDetailRequest>(e =>
+        {
+            e.Property(x => x.District).HasMaxLength(100).IsRequired();
+            e.Property(x => x.WorkType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.SubWorkType).HasMaxLength(150).IsRequired();
+            e.Property(x => x.Remarks).HasMaxLength(4000).IsRequired(false);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(24);
+            e.Property(x => x.RequestedByVendorId).IsRequired();
+            e.Property(x => x.ReviewRemarks).HasMaxLength(1000).IsRequired(false);
+
+            e.HasIndex(x => new { x.VendorProfileId, x.RequestBatchId });
+            e.HasIndex(x => new { x.ApplicationId, x.Status });
+
+            e.HasOne(x => x.VendorProfile)
+                .WithMany(x => x.AdditionalDetailRequests)
+                .HasForeignKey(x => x.VendorProfileId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Application)
+                .WithMany(x => x.AdditionalDetailRequests)
+                .HasForeignKey(x => x.ApplicationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.RequestedByVendor)
+                .WithMany()
+                .HasForeignKey(x => x.RequestedByVendorId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.ReviewedByAdmin)
+                .WithMany()
+                .HasForeignKey(x => x.ReviewedByAdminId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Certificate history may contain several issues for one application.
         b.Entity<VendorCertificate>(e =>
         {
             e.HasIndex(x => x.CertificateNumber)
@@ -165,8 +290,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.VerificationToken)
                 .IsUnique();
 
-            e.HasIndex(x => x.ApplicationId)
-                .IsUnique();
+            // A revalidation creates a new certificate record for the same application.
+            e.HasIndex(x => x.ApplicationId);
 
             e.HasIndex(x => new { x.VendorProfileId, x.IssuedAtUtc });
 
@@ -209,10 +334,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .IsRequired();
 
             e.Property(x => x.RegistrationType).HasMaxLength(10);
+            e.Property(x => x.SubWorkType).HasMaxLength(100);
             e.Property(x => x.GeneratedByAdminId).IsRequired(false);
             e.Property(x => x.RevocationReason).HasMaxLength(1000);
 
-            e.Property(x => x.MaxDownloads).HasDefaultValue(5);
+            e.Property(x => x.MaxDownloads).HasDefaultValue(15);
             e.Property(x => x.DownloadCount).HasDefaultValue(0);
             e.Property(x => x.IsRevoked).HasDefaultValue(false);
 

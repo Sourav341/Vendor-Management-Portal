@@ -5,6 +5,7 @@ using MigraDoc.Rendering;
 using PdfSharp.Fonts;
 using QRCoder;
 using System.Globalization;
+using System.Text.Json;
 using VendorPortal.Data;
 using VendorPortal.Models;
 
@@ -15,7 +16,7 @@ namespace VendorPortal.Services;
 /// The QR code opens the public certificate-verification page.
 ///
 /// Layout (one A4 page, same structure as the Jharkhand UCAN sample slip):
-///   header (state seal, title, UCAN emblem) -> Basic Details box (with photo, PAN, UCAN)
+///   header (Jharkhand state emblem and title) -> Basic Details box (with photo, PAN, UCAN)
 ///   -> Bidder Signature / Date and the verification QR code.
 /// There is intentionally no Registration Details section.
 /// </summary>
@@ -38,7 +39,6 @@ public sealed class CertificateService
     // The state emblem is loaded from wwwroot and embedded into each generated PDF.
     // The UCAN logo remains embedded so the finished certificate has no external image links.
     private const string JharkhandEmblemFileName = "jharkhand-state-emblem.png";
-    private static readonly string UcanEmblemImageSource = "base64:" + CertificateAssets.UcanEmblemBase64;
 
     public CertificateService(
         IWebHostEnvironment environment,
@@ -56,7 +56,7 @@ public sealed class CertificateService
 
     /// <summary>
     /// Generates a one-page PDF and returns its private storage key,
-    /// for example: Certificates/JH34-2026-JH34020427.pdf.
+    /// with a unique file for each certificate issuance.
     /// </summary>
     public Task<string> GeneratePdfAsync(
         VendorCertificate certificate,
@@ -102,15 +102,33 @@ public sealed class CertificateService
 
         Directory.CreateDirectory(certificateDirectory);
 
-        // Agreed filename: Certificates/JH34-{issue year}-{UCAN}.pdf
+        // Keep each certificate issuance in its own file. Renewals can happen
+        // within the same year for the same UCAN, so UCAN/year alone is not unique.
         var issuedYear = certificate.IssuedAtUtc.ToString("yyyy", CultureInfo.InvariantCulture);
         var safeUcanNumber = new string(
             certificate.UcanNumber.Where(char.IsLetterOrDigit).ToArray());
+        var safeVerificationToken = new string(
+            certificate.VerificationToken.Where(char.IsLetterOrDigit).ToArray());
 
         if (string.IsNullOrWhiteSpace(safeUcanNumber))
             throw new InvalidOperationException("UCAN contains no valid filename characters.");
 
-        var fileName = $"JH34-{issuedYear}-{safeUcanNumber}.pdf";
+        if (string.IsNullOrWhiteSpace(safeVerificationToken))
+            throw new InvalidOperationException("Certificate verification token contains no valid filename characters.");
+
+        // Regeneration keeps using the certificate's existing private file. If an
+        // older record has no usable key, generate a token-specific key and return
+        // it so the Admin action can persist the repaired path.
+        var existingFileName = Path.GetFileName(
+            certificate.PdfStorageKey.Replace('/', Path.DirectorySeparatorChar));
+        var canReuseExistingFile = overwriteExisting &&
+            !string.IsNullOrWhiteSpace(certificate.PdfStorageKey) &&
+            string.Equals(Path.GetExtension(existingFileName), ".pdf", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(Path.GetFileNameWithoutExtension(existingFileName));
+
+        var fileName = canReuseExistingFile
+            ? existingFileName
+            : $"JH34-{issuedYear}-{safeUcanNumber}-{safeVerificationToken}.pdf";
         var storageKey = Path.Combine("Certificates", fileName)
             .Replace(Path.DirectorySeparatorChar, '/');
         var pdfPath = Path.Combine(certificateDirectory, fileName);
@@ -295,7 +313,7 @@ public sealed class CertificateService
         document.Info.Subject = $"Vendor certificate for UCAN {certificate.UcanNumber}";
         document.Info.Author = "Government of Jharkhand - Department of Rural Development";
 
-        var normal = document.Styles["Normal"];
+        var normal = document.Styles["Normal"]!;
         normal.Font.Name = PdfFontName;
         normal.Font.Size = BodyFontSize;
         normal.ParagraphFormat.SpaceAfter = Unit.FromPoint(1.5);
@@ -324,7 +342,11 @@ public sealed class CertificateService
         AddSectionHeading(frameCell, "Basic Details");
         frameCell.Elements.Add(CreateBasicDetailsTable(certificate, profilePhotoBytes));
 
-        AddSpacer(frameCell, 14);
+        AddSpacer(frameCell, 8);
+        AddSectionHeading(frameCell, "Work Type Details");
+        frameCell.Elements.Add(CreateWorkTypeTable(certificate));
+
+        AddSpacer(frameCell, 12);
         frameCell.Elements.Add(CreateSignatureAndQrTable(qrImageBytes));
 
         // A closing paragraph keeps the last nested table from sitting flush against the frame.
@@ -360,11 +382,8 @@ public sealed class CertificateService
         AddHeaderLine(titleCell, "UNIQUE CONTRACTOR ACCOUNT NUMBER", 10.8);
         AddHeaderLine(titleCell, "Electronic Certificate Slip - Vendor", 9.5);
 
-        var rightLogoParagraph = row.Cells[2].AddParagraph();
-        rightLogoParagraph.Format.Alignment = ParagraphAlignment.Right;
-        var rightLogo = rightLogoParagraph.AddImage(UcanEmblemImageSource);
-        rightLogo.LockAspectRatio = true;
-        rightLogo.Width = Unit.FromCentimeter(1.75);
+        // Keep the right column blank so the title remains visually centred with one logo.
+        row.Cells[2].VerticalAlignment = VerticalAlignment.Center;
 
         frameCell.Elements.Add(header);
     }
@@ -565,6 +584,82 @@ public sealed class CertificateService
         }
     }
 
+    private static Table CreateWorkTypeTable(VendorCertificate certificate)
+    {
+        var table = new Table();
+        table.Format.Font.Name = PdfFontName;
+        table.Format.Font.Size = BodyFontSize;
+        table.LeftPadding = Unit.FromPoint(5);
+        table.RightPadding = Unit.FromPoint(5);
+        table.TopPadding = Unit.FromPoint(3);
+        table.BottomPadding = Unit.FromPoint(3);
+        table.AddColumn(Unit.FromCentimeter(4.2));
+        table.AddColumn(Unit.FromCentimeter(6.2));
+        table.AddColumn(Unit.FromCentimeter(8.2));
+
+        var header = table.AddRow();
+        header.Shading.Color = Colors.LightGray;
+        header.Format.Font.Bold = true;
+        header.Cells[0].AddParagraph("District");
+        header.Cells[1].AddParagraph("Work Type");
+        header.Cells[2].AddParagraph("Sub Work Type");
+
+        List<CertificateAdditionalDetailSnapshot> rows;
+        try
+        {
+            rows = string.IsNullOrWhiteSpace(certificate.AdditionalDetailsSnapshotJson)
+                ? new List<CertificateAdditionalDetailSnapshot>()
+                : JsonSerializer.Deserialize<List<CertificateAdditionalDetailSnapshot>>(
+                    certificate.AdditionalDetailsSnapshotJson) ?? new();
+        }
+        catch (JsonException)
+        {
+            rows = new();
+        }
+
+        // Keep older certificates readable when they predate the coverage snapshot column.
+        if (rows.Count == 0 &&
+            (!string.IsNullOrWhiteSpace(certificate.RegistrationType) ||
+             !string.IsNullOrWhiteSpace(certificate.SubWorkType)))
+        {
+            rows.Add(new CertificateAdditionalDetailSnapshot
+            {
+                District = certificate.District,
+                WorkType = certificate.RegistrationType ?? string.Empty,
+                SubWorkType = certificate.SubWorkType ?? string.Empty
+            });
+        }
+
+        if (rows.Count == 0)
+        {
+            var emptyRow = table.AddRow();
+            emptyRow.Cells[0].MergeRight = 2;
+            emptyRow.Cells[0].AddParagraph("No approved work type details recorded.");
+        }
+        else
+        {
+            foreach (var detail in rows)
+            {
+                var row = table.AddRow();
+                row.Cells[0].AddParagraph(ValueOrFallback(detail.District));
+                row.Cells[1].AddParagraph(ValueOrFallback(detail.WorkType));
+                row.Cells[2].AddParagraph(ValueOrFallback(detail.SubWorkType));
+            }
+        }
+
+        for (var rowIndex = 0; rowIndex < table.Rows.Count; rowIndex++)
+        {
+            for (var columnIndex = 0; columnIndex < table.Columns.Count; columnIndex++)
+            {
+                var border = table.Rows[rowIndex].Cells[columnIndex].Borders;
+                border.Width = 0.4;
+                border.Color = Colors.DarkGray;
+            }
+        }
+
+        return table;
+    }
+
     private static Table CreateSignatureAndQrTable(byte[] qrImageBytes)
     {
         var table = new Table();
@@ -573,6 +668,8 @@ public sealed class CertificateService
         table.Format.Font.Size = BodyFontSize;
         table.AddColumn(Unit.FromCentimeter(13.6));
         table.AddColumn(Unit.FromCentimeter(5.0));
+
+
 
         var row = table.AddRow();
         row.Height = Unit.FromCentimeter(2.8); // leaves room above the label for the bidder to sign

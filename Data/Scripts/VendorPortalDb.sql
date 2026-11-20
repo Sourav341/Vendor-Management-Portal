@@ -174,6 +174,26 @@ BEGIN
 END
 GO
 
+-- Add new required document slots to existing in-progress applications.
+INSERT INTO dbo.VendorDocuments (ApplicationId, DocumentType, IsRequired, Status)
+SELECT a.ApplicationId,
+       newDocs.DocumentType,
+       CASE WHEN a.Status IN (N'Draft', N'PendingReview', N'UnderReview', N'CorrectionsRequired')
+            THEN 1 ELSE 0 END,
+       N'NotSubmitted'
+FROM dbo.VendorApplications AS a
+CROSS JOIN (VALUES
+    (N'AffidavitNoBloodRelation'),
+    (N'ItemLicense')
+) AS newDocs(DocumentType)
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.VendorDocuments AS existingDoc
+    WHERE existingDoc.ApplicationId = a.ApplicationId
+      AND existingDoc.DocumentType = newDocs.DocumentType
+);
+GO
+
 IF OBJECT_ID(N'dbo.DocumentVersions', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.DocumentVersions (
@@ -185,10 +205,40 @@ BEGIN
         ContentType       NVARCHAR(100) NOT NULL,
         SizeBytes         BIGINT NOT NULL,
         UploadedAt        DATETIME2(7) NOT NULL CONSTRAINT DF_DocumentVersions_UploadedAt DEFAULT SYSUTCDATETIME(),
+        UploadedByUserId  NVARCHAR(450) NULL,
         CONSTRAINT PK_DocumentVersions PRIMARY KEY (DocumentVersionId),
-        CONSTRAINT FK_DocumentVersions_VendorDocuments FOREIGN KEY (VendorDocumentId) REFERENCES dbo.VendorDocuments (VendorDocumentId) ON DELETE CASCADE
+        CONSTRAINT FK_DocumentVersions_VendorDocuments FOREIGN KEY (VendorDocumentId) REFERENCES dbo.VendorDocuments (VendorDocumentId) ON DELETE CASCADE,
+        CONSTRAINT FK_DocumentVersions_AspNetUsers_UploadedByUserId FOREIGN KEY (UploadedByUserId) REFERENCES dbo.AspNetUsers (Id)
     );
     CREATE UNIQUE INDEX IX_DocumentVersions_VendorDocumentId_VersionNumber ON dbo.DocumentVersions (VendorDocumentId, VersionNumber);
+END
+GO
+
+IF COL_LENGTH(N'dbo.DocumentVersions', N'UploadedByUserId') IS NULL
+BEGIN
+    ALTER TABLE dbo.DocumentVersions ADD UploadedByUserId NVARCHAR(450) NULL;
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.foreign_keys
+    WHERE name = N'FK_DocumentVersions_AspNetUsers_UploadedByUserId'
+)
+BEGIN
+    ALTER TABLE dbo.DocumentVersions
+        ADD CONSTRAINT FK_DocumentVersions_AspNetUsers_UploadedByUserId
+        FOREIGN KEY (UploadedByUserId) REFERENCES dbo.AspNetUsers (Id);
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_DocumentVersions_UploadedByUserId'
+      AND object_id = OBJECT_ID(N'dbo.DocumentVersions')
+)
+BEGIN
+    CREATE INDEX IX_DocumentVersions_UploadedByUserId
+        ON dbo.DocumentVersions (UploadedByUserId);
 END
 GO
 
@@ -227,6 +277,226 @@ BEGIN
     CREATE INDEX IX_ApplicationDecisionHistories_ApplicationId ON dbo.ApplicationDecisionHistories (ApplicationId);
     CREATE INDEX IX_ApplicationDecisionHistories_AdminUserId   ON dbo.ApplicationDecisionHistories (AdminUserId);
 END
+GO
+
+-- A vendor can receive multiple certificate records for one application after document revalidation.
+IF OBJECT_ID(N'dbo.VendorCertificates', N'U') IS NOT NULL
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = N'IX_VendorCertificates_ApplicationId'
+          AND object_id = OBJECT_ID(N'dbo.VendorCertificates')
+          AND is_unique = 1
+    )
+        DROP INDEX IX_VendorCertificates_ApplicationId ON dbo.VendorCertificates;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = N'IX_VendorCertificates_ApplicationId'
+          AND object_id = OBJECT_ID(N'dbo.VendorCertificates')
+    )
+        CREATE INDEX IX_VendorCertificates_ApplicationId ON dbo.VendorCertificates (ApplicationId);
+END
+GO
+
+IF OBJECT_ID(N'dbo.CertificateRevalidationCycles', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CertificateRevalidationCycles (
+        CertificateRevalidationCycleId INT IDENTITY(1,1) NOT NULL,
+        ApplicationId                  INT NOT NULL,
+        Status                         NVARCHAR(20) NOT NULL,
+        RequestedByAdminId             NVARCHAR(450) NOT NULL,
+        RequestedAtUtc                 DATETIME2(7) NOT NULL,
+        ApprovedByAdminId              NVARCHAR(450) NULL,
+        ApprovedAtUtc                  DATETIME2(7) NULL,
+        CONSTRAINT PK_CertificateRevalidationCycles PRIMARY KEY (CertificateRevalidationCycleId),
+        CONSTRAINT FK_CertificateRevalidationCycles_VendorApplications_ApplicationId FOREIGN KEY (ApplicationId) REFERENCES dbo.VendorApplications (ApplicationId),
+        CONSTRAINT FK_CertificateRevalidationCycles_AspNetUsers_RequestedByAdminId FOREIGN KEY (RequestedByAdminId) REFERENCES dbo.AspNetUsers (Id),
+        CONSTRAINT FK_CertificateRevalidationCycles_AspNetUsers_ApprovedByAdminId FOREIGN KEY (ApprovedByAdminId) REFERENCES dbo.AspNetUsers (Id)
+    );
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationCycles_ApplicationId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationCycles')
+)
+    CREATE UNIQUE INDEX IX_CertificateRevalidationCycles_ApplicationId
+        ON dbo.CertificateRevalidationCycles (ApplicationId)
+        WHERE Status = N'Open';
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationCycles_RequestedByAdminId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationCycles')
+)
+    CREATE INDEX IX_CertificateRevalidationCycles_RequestedByAdminId
+        ON dbo.CertificateRevalidationCycles (RequestedByAdminId);
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationCycles_ApprovedByAdminId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationCycles')
+)
+    CREATE INDEX IX_CertificateRevalidationCycles_ApprovedByAdminId
+        ON dbo.CertificateRevalidationCycles (ApprovedByAdminId);
+GO
+
+IF OBJECT_ID(N'dbo.CertificateRevalidationDocuments', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.CertificateRevalidationDocuments (
+        CertificateRevalidationDocumentId INT IDENTITY(1,1) NOT NULL,
+        CertificateRevalidationCycleId    INT NOT NULL,
+        VendorDocumentId                  INT NOT NULL,
+        SubmittedVersionId                INT NULL,
+        Status                            NVARCHAR(20) NOT NULL,
+        RequestedByAdminId                NVARCHAR(450) NOT NULL,
+        RequestedAtUtc                    DATETIME2(7) NOT NULL,
+        ReviewedByAdminId                 NVARCHAR(450) NULL,
+        ReviewedAtUtc                     DATETIME2(7) NULL,
+        ReviewRemarks                     NVARCHAR(1000) NULL,
+        CONSTRAINT PK_CertificateRevalidationDocuments PRIMARY KEY (CertificateRevalidationDocumentId),
+        CONSTRAINT FK_CertificateRevalidationDocuments_CertificateRevalidationCycles_CertificateRevalidationCycleId FOREIGN KEY (CertificateRevalidationCycleId) REFERENCES dbo.CertificateRevalidationCycles (CertificateRevalidationCycleId),
+        CONSTRAINT FK_CertificateRevalidationDocuments_VendorDocuments_VendorDocumentId FOREIGN KEY (VendorDocumentId) REFERENCES dbo.VendorDocuments (VendorDocumentId),
+        CONSTRAINT FK_CertificateRevalidationDocuments_DocumentVersions_SubmittedVersionId FOREIGN KEY (SubmittedVersionId) REFERENCES dbo.DocumentVersions (DocumentVersionId),
+        CONSTRAINT FK_CertificateRevalidationDocuments_AspNetUsers_RequestedByAdminId FOREIGN KEY (RequestedByAdminId) REFERENCES dbo.AspNetUsers (Id),
+        CONSTRAINT FK_CertificateRevalidationDocuments_AspNetUsers_ReviewedByAdminId FOREIGN KEY (ReviewedByAdminId) REFERENCES dbo.AspNetUsers (Id)
+    );
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationDocuments_CertificateRevalidationCycleId_VendorDocumentId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationDocuments')
+)
+    CREATE UNIQUE INDEX IX_CertificateRevalidationDocuments_CertificateRevalidationCycleId_VendorDocumentId
+        ON dbo.CertificateRevalidationDocuments (CertificateRevalidationCycleId, VendorDocumentId);
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationDocuments_VendorDocumentId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationDocuments')
+)
+    CREATE INDEX IX_CertificateRevalidationDocuments_VendorDocumentId
+        ON dbo.CertificateRevalidationDocuments (VendorDocumentId);
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationDocuments_SubmittedVersionId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationDocuments')
+)
+    CREATE INDEX IX_CertificateRevalidationDocuments_SubmittedVersionId
+        ON dbo.CertificateRevalidationDocuments (SubmittedVersionId);
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationDocuments_RequestedByAdminId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationDocuments')
+)
+    CREATE INDEX IX_CertificateRevalidationDocuments_RequestedByAdminId
+        ON dbo.CertificateRevalidationDocuments (RequestedByAdminId);
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = N'IX_CertificateRevalidationDocuments_ReviewedByAdminId'
+      AND object_id = OBJECT_ID(N'dbo.CertificateRevalidationDocuments')
+)
+    CREATE INDEX IX_CertificateRevalidationDocuments_ReviewedByAdminId
+        ON dbo.CertificateRevalidationDocuments (ReviewedByAdminId);
+GO
+
+/* ----------------------- Work type certificate fields ----------------------- */
+
+IF OBJECT_ID(N'dbo.VendorProfiles', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.VendorProfiles', N'SubWorkType') IS NULL
+    ALTER TABLE dbo.VendorProfiles ADD SubWorkType NVARCHAR(100) NULL;
+
+IF OBJECT_ID(N'dbo.VendorCertificates', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.VendorCertificates', N'SubWorkType') IS NULL
+    ALTER TABLE dbo.VendorCertificates ADD SubWorkType NVARCHAR(100) NULL;
+GO
+
+/* ---------------- Additional Details requests and certificate snapshots ---------------- */
+
+IF OBJECT_ID(N'dbo.VendorCertificates', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.VendorCertificates', N'AdditionalDetailsSnapshotJson') IS NULL
+    ALTER TABLE dbo.VendorCertificates ADD AdditionalDetailsSnapshotJson NVARCHAR(MAX) NULL;
+
+IF OBJECT_ID(N'dbo.VendorCertificates', N'U') IS NOT NULL
+BEGIN
+    UPDATE dbo.VendorCertificates SET MaxDownloads = 15 WHERE MaxDownloads <> 15;
+
+    DECLARE @MaxDownloadsDefault sysname;
+    SELECT @MaxDownloadsDefault = constraintObject.name
+    FROM sys.default_constraints AS constraintObject
+    INNER JOIN sys.columns AS columnObject
+        ON columnObject.object_id = constraintObject.parent_object_id
+       AND columnObject.column_id = constraintObject.parent_column_id
+    WHERE constraintObject.parent_object_id = OBJECT_ID(N'dbo.VendorCertificates')
+      AND columnObject.name = N'MaxDownloads';
+
+    IF @MaxDownloadsDefault IS NOT NULL
+        EXEC(N'ALTER TABLE dbo.VendorCertificates DROP CONSTRAINT ' + QUOTENAME(@MaxDownloadsDefault));
+
+    ALTER TABLE dbo.VendorCertificates
+        ADD CONSTRAINT DF_VendorCertificates_MaxDownloads DEFAULT (15) FOR MaxDownloads;
+END;
+
+IF OBJECT_ID(N'dbo.VendorProfiles', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.VendorProfiles', N'UcanGeneratedAt') IS NOT NULL
+BEGIN
+    UPDATE profile
+    SET UcanGeneratedAt = COALESCE(
+        (SELECT MIN(certificate.IssuedAtUtc)
+         FROM dbo.VendorCertificates AS certificate
+         WHERE certificate.VendorProfileId = profile.VendorProfileId),
+        profile.CreatedAt)
+    FROM dbo.VendorProfiles AS profile
+    WHERE profile.UcanNumber IS NOT NULL
+      AND profile.UcanNumber <> ''
+      AND profile.UcanGeneratedAt IS NULL;
+END;
+
+IF OBJECT_ID(N'dbo.VendorAdditionalDetailRequests', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.VendorAdditionalDetailRequests
+    (
+        VendorAdditionalDetailRequestId INT IDENTITY(1,1) NOT NULL
+            CONSTRAINT PK_VendorAdditionalDetailRequests PRIMARY KEY,
+        RequestBatchId UNIQUEIDENTIFIER NOT NULL,
+        VendorProfileId INT NOT NULL,
+        ApplicationId INT NOT NULL,
+        District NVARCHAR(100) NOT NULL,
+        WorkType NVARCHAR(100) NOT NULL,
+        SubWorkType NVARCHAR(150) NOT NULL,
+        Remarks NVARCHAR(4000) NULL,
+        Status NVARCHAR(24) NOT NULL,
+        RequestedByVendorId NVARCHAR(450) NOT NULL,
+        SubmittedAtUtc DATETIME2 NOT NULL,
+        ReviewedByAdminId NVARCHAR(450) NULL,
+        ReviewedAtUtc DATETIME2 NULL,
+        ReviewRemarks NVARCHAR(1000) NULL,
+        CONSTRAINT FK_VendorAdditionalDetailRequests_VendorProfiles_VendorProfileId
+            FOREIGN KEY (VendorProfileId) REFERENCES dbo.VendorProfiles(VendorProfileId),
+        CONSTRAINT FK_VendorAdditionalDetailRequests_VendorApplications_ApplicationId
+            FOREIGN KEY (ApplicationId) REFERENCES dbo.VendorApplications(ApplicationId),
+        CONSTRAINT FK_VendorAdditionalDetailRequests_AspNetUsers_RequestedByVendorId
+            FOREIGN KEY (RequestedByVendorId) REFERENCES dbo.AspNetUsers(Id),
+        CONSTRAINT FK_VendorAdditionalDetailRequests_AspNetUsers_ReviewedByAdminId
+            FOREIGN KEY (ReviewedByAdminId) REFERENCES dbo.AspNetUsers(Id)
+    );
+
+    CREATE INDEX IX_VendorAdditionalDetailRequests_ApplicationId_Status
+        ON dbo.VendorAdditionalDetailRequests(ApplicationId, Status);
+    CREATE INDEX IX_VendorAdditionalDetailRequests_RequestedByVendorId
+        ON dbo.VendorAdditionalDetailRequests(RequestedByVendorId);
+    CREATE INDEX IX_VendorAdditionalDetailRequests_ReviewedByAdminId
+        ON dbo.VendorAdditionalDetailRequests(ReviewedByAdminId);
+    CREATE INDEX IX_VendorAdditionalDetailRequests_VendorProfileId_RequestBatchId
+        ON dbo.VendorAdditionalDetailRequests(VendorProfileId, RequestBatchId);
+END;
 GO
 
 /* ------------------------------- Seed roles ------------------------------- */
